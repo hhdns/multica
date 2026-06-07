@@ -72,6 +72,7 @@ type TaskContextForEnv struct {
 	AgentName               string
 	AgentInstructions       string // agent identity/persona instructions, injected into CLAUDE.md
 	AgentPersonaContext     string // real-time mood/spontaneity blurb; injected as ## Current State
+	AgentMemoryContext      string // relevant past memories block; injected as ## Relevant Past Experience
 	AgentSkills             []SkillContextForEnv
 	Repos                   []RepoContextForEnv     // workspace repos available for checkout
 	ProjectID               string                  // issue's project, when present

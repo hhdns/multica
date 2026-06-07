@@ -360,6 +360,11 @@ type TaskAgentData struct {
 	// current persona state (mood, spontaneity) injected into the runtime
 	// brief as ## Current State. Empty when no persona row exists yet.
 	PersonaContext string `json:"persona_context,omitempty"`
+	// MemoryContext is a pre-formatted markdown block of relevant past
+	// memories retrieved via semantic similarity search against the current
+	// task's issue content. Injected as ## Relevant Past Experience in the
+	// runtime brief. Empty when no memories exist or embedding is disabled.
+	MemoryContext string `json:"memory_context,omitempty"`
 }
 
 // taskToResponse maps a queue row to its wire shape. workspaceID is threaded

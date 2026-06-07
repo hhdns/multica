@@ -1301,6 +1301,18 @@ func (h *Handler) ClaimTaskByRuntime(w http.ResponseWriter, r *http.Request) {
 			resp.WorkspaceID = uuidToString(issue.WorkspaceID)
 			resp.ThreadName = issue.Title
 
+			// Retrieve relevant past memories for this agent using the issue
+			// title as the semantic query. Non-blocking: failure yields "".
+			if resp.Agent != nil {
+				queryText := issue.Title
+				if issue.Description.Valid && issue.Description.String != "" {
+					queryText = issue.Title + " " + issue.Description.String
+				}
+				resp.Agent.MemoryContext = service.SearchRelevantMemories(
+					r.Context(), h.Queries, parseUUID(resp.Agent.ID), queryText,
+				)
+			}
+
 			// Squad-leader briefing injection: when the issue is assigned
 			// to a squad and the claiming agent is that squad's current
 			// leader, append a full briefing (Operating Protocol + Roster
@@ -1994,6 +2006,9 @@ func (h *Handler) CompleteTask(w http.ResponseWriter, r *http.Request) {
 		slog.Warn("complete task: failed to revoke task tokens", "task_id", uuidToString(task.ID), "error", err)
 	}
 
+	// Record an episodic memory for this task outcome (fire-and-forget).
+	go h.recordTaskOutcomeMemory(context.Background(), task, "completed", workspaceID)
+
 	slog.Info("task completed", "task_id", taskID, "agent_id", uuidToString(task.AgentID))
 	writeJSON(w, http.StatusOK, taskToResponse(*task, workspaceID))
 }
@@ -2158,8 +2173,53 @@ func (h *Handler) FailTask(w http.ResponseWriter, r *http.Request) {
 		slog.Warn("fail task: failed to revoke task tokens", "task_id", uuidToString(task.ID), "error", err)
 	}
 
+	// Record an episodic memory for this task outcome (fire-and-forget).
+	go h.recordTaskOutcomeMemory(context.Background(), task, "failed", workspaceID)
+
 	slog.Info("task failed", "task_id", taskID, "agent_id", uuidToString(task.AgentID), "task_error", req.Error, "failure_reason", req.FailureReason)
 	writeJSON(w, http.StatusOK, taskToResponse(*task, workspaceID))
+}
+
+// recordTaskOutcomeMemory creates an episodic memory entry after a task
+// reaches a terminal state (completed or failed). Runs in a goroutine;
+// errors are logged only and never surface to the caller.
+func (h *Handler) recordTaskOutcomeMemory(
+	ctx context.Context,
+	task *db.AgentTaskQueue,
+	outcomeType string,
+	workspaceID string,
+) {
+	if task == nil || !task.AgentID.Valid || !task.IssueID.Valid {
+		return
+	}
+
+	// Fetch the issue title for a meaningful memory summary.
+	var issueTitle string
+	if issue, err := h.Queries.GetIssue(ctx, task.IssueID); err == nil {
+		issueTitle = issue.Title
+	}
+
+	// Derive trigger type from task fields.
+	triggerType := "on_assign"
+	if task.TriggerCommentID.Valid {
+		triggerType = "comment"
+	} else if task.ChatSessionID.Valid {
+		triggerType = "chat"
+	} else if task.AutopilotRunID.Valid {
+		triggerType = "autopilot"
+	}
+
+	content := service.SummarizeTaskOutcome(ctx, issueTitle, outcomeType, triggerType)
+
+	sentiment := "positive"
+	importance := float32(0.5)
+	if outcomeType == "failed" {
+		sentiment = "negative"
+		importance = 0.65 // failures carry slightly more weight — learn from them
+	}
+
+	wsUUID := parseUUID(workspaceID)
+	service.RecordTaskMemory(ctx, h.Queries, task.AgentID, wsUUID, task.IssueID, task.ID, content, sentiment, importance)
 }
 
 // ---------------------------------------------------------------------------

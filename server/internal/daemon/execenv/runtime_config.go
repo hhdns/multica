@@ -397,6 +397,13 @@ func buildMetaSkillContent(provider string, ctx TaskContextForEnv) string {
 		b.WriteString("\n\n")
 	}
 
+	// Inject semantically-relevant past memories. The block is pre-formatted
+	// by the server; emit it verbatim when non-empty.
+	if ctx.AgentMemoryContext != "" {
+		b.WriteString(ctx.AgentMemoryContext)
+		b.WriteString("\n")
+	}
+
 	// Requesting User block: human-supplied self-description for the user the
 	// agent is acting on behalf of, sourced from the runtime owner's profile
 	// (see handler/daemon.go). Heading is emitted ONLY when description is

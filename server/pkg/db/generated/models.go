@@ -8,6 +8,7 @@ import (
 	"net/netip"
 
 	"github.com/jackc/pgx/v5/pgtype"
+	pgvector "github.com/pgvector/pgvector-go"
 )
 
 type ActivityLog struct {
@@ -58,6 +59,20 @@ type AgentInteractionSignal struct {
 	SourceUserID pgtype.UUID        `json:"source_user_id"`
 	Processed    bool               `json:"processed"`
 	CreatedAt    pgtype.Timestamptz `json:"created_at"`
+}
+
+type AgentMemory struct {
+	ID            pgtype.UUID        `json:"id"`
+	AgentID       pgtype.UUID        `json:"agent_id"`
+	WorkspaceID   pgtype.UUID        `json:"workspace_id"`
+	Content       string             `json:"content"`
+	Category      string             `json:"category"`
+	Sentiment     string             `json:"sentiment"`
+	SourceIssueID pgtype.UUID        `json:"source_issue_id"`
+	SourceTaskID  pgtype.UUID        `json:"source_task_id"`
+	Embedding     pgvector.Vector    `json:"embedding"`
+	Importance    float32            `json:"importance"`
+	CreatedAt     pgtype.Timestamptz `json:"created_at"`
 }
 
 type AgentPersona struct {

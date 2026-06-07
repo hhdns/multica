@@ -142,6 +142,10 @@ type AgentData struct {
 	// mood / spontaneity state, formatted server-side and injected into the
 	// runtime brief as ## Current State. Empty when no persona row exists.
 	PersonaContext string `json:"persona_context,omitempty"`
+	// MemoryContext is a pre-formatted markdown block of relevant past
+	// memories (semantic search result). Injected as ## Relevant Past
+	// Experience in the runtime brief.
+	MemoryContext string `json:"memory_context,omitempty"`
 }
 
 // SkillData represents a structured skill for task execution.
