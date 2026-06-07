@@ -240,6 +240,48 @@ func (h *Handler) UpdateAgentPersona(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, personaToResponse(updated, signals))
 }
 
+// SynthesizeAgentPersona handles POST /api/agents/{id}/persona/synthesize.
+// It calls Claude Haiku to regenerate agent.instructions from the current
+// persona data. Requires agent-management permission. Returns 202 Accepted
+// and runs the synthesis synchronously (it's fast; ~1–2 s on Haiku).
+func (h *Handler) SynthesizeAgentPersona(w http.ResponseWriter, r *http.Request) {
+	agentID := chi.URLParam(r, "id")
+	agent, ok := h.loadAgentForUser(w, r, agentID)
+	if !ok {
+		return
+	}
+	if !h.canManageAgent(w, r, agent) {
+		return
+	}
+
+	ctx := r.Context()
+	if err := service.SynthesizeAgentInstructions(
+		ctx, h.Queries, agent.ID,
+		agent.Name,
+		agent.Instructions,
+	); err != nil {
+		slog.Warn("synthesize persona: failed",
+			append(logger.RequestAttrs(r), "error", err, "agent_id", agentID)...)
+		writeError(w, http.StatusInternalServerError, "synthesis failed: "+err.Error())
+		return
+	}
+
+	slog.Info("agent instructions synthesized from persona",
+		append(logger.RequestAttrs(r), "agent_id", agentID)...)
+
+	// Return the fresh persona so the UI can update last_synthesized_at.
+	persona, err := h.Queries.GetAgentPersona(ctx, agent.ID)
+	if err != nil {
+		w.WriteHeader(http.StatusAccepted)
+		return
+	}
+	signals, _ := h.Queries.ListAgentInteractionSignals(ctx, db.ListAgentInteractionSignalsParams{
+		AgentID: agent.ID,
+		Limit:   20,
+	})
+	writeJSON(w, http.StatusAccepted, personaToResponse(persona, signals))
+}
+
 // RecordTaskSignal writes a system-sourced interaction signal after task completion/failure.
 func RecordTaskSignal(ctx context.Context, q *db.Queries, agentID, workspaceID pgtype.UUID, signalType, content string) {
 	service.RecordCommentSignal(ctx, q, agentID, workspaceID, signalType, 0.5, content, pgtype.UUID{}, pgtype.UUID{})

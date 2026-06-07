@@ -271,6 +271,18 @@ func (q *Queries) MarkAgentSignalsProcessed(ctx context.Context, agentID pgtype.
 	return err
 }
 
+const setAgentPersonaSynthesizedAt = `-- name: SetAgentPersonaSynthesizedAt :exec
+UPDATE agent_persona SET
+    last_synthesized_at = now(),
+    updated_at          = now()
+WHERE agent_id = $1
+`
+
+func (q *Queries) SetAgentPersonaSynthesizedAt(ctx context.Context, agentID pgtype.UUID) error {
+	_, err := q.db.Exec(ctx, setAgentPersonaSynthesizedAt, agentID)
+	return err
+}
+
 const updateAgentPersona = `-- name: UpdateAgentPersona :one
 UPDATE agent_persona SET
     trait_thoroughness  = $2,

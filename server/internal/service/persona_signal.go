@@ -172,6 +172,9 @@ func MaybeApplyTraitDrift(ctx context.Context, q *db.Queries, agentID pgtype.UUI
 	if err := q.MarkAgentSignalsProcessed(ctx, agentID); err != nil {
 		slog.Warn("persona: mark signals processed failed", "error", err, "agent_id", agentID)
 	}
+
+	// Auto-synthesize instructions every synthesisAfterBatches drift batches.
+	MaybeSynthesizeAfterDrift(ctx, q, agentID)
 }
 
 // UpdateAgentMood recalculates and persists the agent's mood based on its

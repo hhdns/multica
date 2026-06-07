@@ -891,6 +891,12 @@ export class ApiClient {
     });
   }
 
+  async synthesizeAgentPersona(id: string): Promise<AgentPersona> {
+    return this.fetch(`/api/agents/${id}/persona/synthesize`, {
+      method: "POST",
+    });
+  }
+
   async restoreAgent(id: string): Promise<Agent> {
     return this.fetch(`/api/agents/${id}/restore`, { method: "POST" });
   }

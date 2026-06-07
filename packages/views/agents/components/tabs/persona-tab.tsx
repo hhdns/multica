@@ -1,7 +1,7 @@
 "use client";
 
 import { useCallback, useState } from "react";
-import { Loader2, Save, Sparkles, ThumbsUp, ThumbsDown, Plus, X } from "lucide-react";
+import { Loader2, Save, Sparkles, ThumbsUp, ThumbsDown, Plus, X, Wand2 } from "lucide-react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import type { Agent, AgentPersona, UpdateAgentPersonaRequest } from "@multica/core/types";
 import { api } from "@multica/core/api";
@@ -90,6 +90,13 @@ export function PersonaTab({ agent, canEdit }: PersonaTabProps) {
     },
   });
 
+  const synthesize = useMutation({
+    mutationFn: () => api.synthesizeAgentPersona(agent.id),
+    onSuccess: (updated) => {
+      qc.setQueryData(queryKey, updated);
+    },
+  });
+
   if (isLoading || !persona) {
     return (
       <div className="flex h-full items-center justify-center">
@@ -105,6 +112,12 @@ export function PersonaTab({ agent, canEdit }: PersonaTabProps) {
       <StrengthsSection persona={persona} canEdit={canEdit} onSave={(data) => mutation.mutate(data)} />
       <IdentitySection persona={persona} canEdit={canEdit} onSave={(data) => mutation.mutate(data)} saving={mutation.isPending} />
       <VarianceSection persona={persona} canEdit={canEdit} onSave={(data) => mutation.mutate(data)} saving={mutation.isPending} />
+      <SynthesizeSection
+        persona={persona}
+        canEdit={canEdit}
+        onSynthesize={() => synthesize.mutate()}
+        synthesizing={synthesize.isPending}
+      />
       {persona.recent_signals.length > 0 && <SignalsSection persona={persona} />}
     </div>
   );
@@ -386,6 +399,56 @@ function VarianceSection({
           </Button>
         </div>
       )}
+    </div>
+  );
+}
+
+function SynthesizeSection({
+  persona,
+  canEdit,
+  onSynthesize,
+  synthesizing,
+}: {
+  persona: AgentPersona;
+  canEdit: boolean;
+  onSynthesize: () => void;
+  synthesizing: boolean;
+}) {
+  const lastSynth = persona.last_synthesized_at
+    ? new Date(persona.last_synthesized_at).toLocaleString()
+    : null;
+
+  return (
+    <div className="flex flex-col gap-2">
+      <SectionTitle>Instructions Synthesis</SectionTitle>
+      <div className="flex items-center gap-3 rounded-lg border bg-muted/30 px-4 py-3">
+        <div className="min-w-0 flex-1">
+          <p className="text-xs text-foreground">
+            Re-generate this agent&apos;s instructions from its current persona data using Claude.
+          </p>
+          {lastSynth ? (
+            <p className="mt-0.5 text-[10px] text-muted-foreground">Last synthesized: {lastSynth}</p>
+          ) : (
+            <p className="mt-0.5 text-[10px] text-muted-foreground">Never synthesized yet</p>
+          )}
+        </div>
+        {canEdit && (
+          <Button
+            size="sm"
+            variant="outline"
+            onClick={onSynthesize}
+            disabled={synthesizing}
+            className="shrink-0"
+          >
+            {synthesizing ? (
+              <Loader2 className="mr-1.5 h-3.5 w-3.5 animate-spin" />
+            ) : (
+              <Wand2 className="mr-1.5 h-3.5 w-3.5" />
+            )}
+            {synthesizing ? "Synthesizing…" : "Synthesize"}
+          </Button>
+        )}
+      </div>
     </div>
   );
 }

@@ -60,6 +60,12 @@ UPDATE agent_interaction_signal
 SET processed = true
 WHERE agent_id = $1 AND NOT processed;
 
+-- name: SetAgentPersonaSynthesizedAt :exec
+UPDATE agent_persona SET
+    last_synthesized_at = now(),
+    updated_at          = now()
+WHERE agent_id = $1;
+
 -- name: DriftAgentPersonaTraits :one
 UPDATE agent_persona SET
     trait_thoroughness  = GREATEST(0, LEAST(100, trait_thoroughness  + $2)),
