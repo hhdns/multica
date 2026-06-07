@@ -1246,6 +1246,12 @@ func (h *Handler) ClaimTaskByRuntime(w http.ResponseWriter, r *http.Request) {
 			ThinkingLevel: agent.ThinkingLevel.String,
 			RuntimeConfig: runtimeConfig,
 		}
+
+		// Inject real-time persona state (mood, spontaneity) into the claim
+		// response. Failure is non-blocking — agent still runs without it.
+		if persona, err := h.Queries.GetAgentPersona(r.Context(), agent.ID); err == nil {
+			resp.Agent.PersonaContext = formatPersonaContext(persona)
+		}
 	}
 
 	// Resolve the runtime owner's profile description so the daemon can

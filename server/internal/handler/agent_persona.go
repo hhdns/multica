@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"log/slog"
 	"net/http"
+	"strings"
 
 	"github.com/go-chi/chi/v5"
 	"github.com/jackc/pgx/v5/pgtype"
@@ -238,6 +239,34 @@ func (h *Handler) UpdateAgentPersona(w http.ResponseWriter, r *http.Request) {
 	slog.Info("agent persona updated",
 		append(logger.RequestAttrs(r), "agent_id", agentID)...)
 	writeJSON(w, http.StatusOK, personaToResponse(updated, signals))
+}
+
+// formatPersonaContext returns a compact natural-language blurb describing the
+// agent's current persona state for injection into the task runtime brief.
+// It is intentionally short (2-4 lines) so it doesn't bloat the prompt.
+func formatPersonaContext(p db.AgentPersona) string {
+	var b strings.Builder
+
+	// Mood-based behavioural nudge.
+	switch p.Mood {
+	case "energized":
+		b.WriteString("You're in a high-energy state with recent successes behind you. Trust your instincts, move decisively, and tackle ambitious tasks with confidence.")
+	case "cautious":
+		b.WriteString("You've encountered some setbacks recently. Be deliberate, double-check your work, and prefer smaller, safer steps over bold moves.")
+	case "playful":
+		b.WriteString("You're feeling creative and spontaneous today. Bring originality to your approach — there's room to explore unconventional solutions.")
+	default: // calm
+		b.WriteString("You're in a steady, balanced state. Work methodically and adapt your approach to what each task needs.")
+	}
+
+	// Spontaneity hint only at the extremes to avoid noise.
+	if p.VarianceLevel >= 70 {
+		b.WriteString(" Occasional creative flourishes and unexpected angles are welcome — lean into your spontaneous side when context allows.")
+	} else if p.VarianceLevel <= 20 {
+		b.WriteString(" Stay consistent and predictable — your current mode values reliability over novelty.")
+	}
+
+	return b.String()
 }
 
 // SynthesizeAgentPersona handles POST /api/agents/{id}/persona/synthesize.

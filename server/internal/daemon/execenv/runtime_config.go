@@ -389,6 +389,14 @@ func buildMetaSkillContent(provider string, ctx TaskContextForEnv) string {
 		b.WriteString("\n\n")
 	}
 
+	// Inject real-time persona state (mood + spontaneity) so the agent's
+	// current character influences every task, not just post-synthesis runs.
+	if ctx.AgentPersonaContext != "" {
+		b.WriteString("## Current State\n\n")
+		b.WriteString(ctx.AgentPersonaContext)
+		b.WriteString("\n\n")
+	}
+
 	// Requesting User block: human-supplied self-description for the user the
 	// agent is acting on behalf of, sourced from the runtime owner's profile
 	// (see handler/daemon.go). Heading is emitted ONLY when description is

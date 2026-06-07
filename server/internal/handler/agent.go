@@ -356,6 +356,10 @@ type TaskAgentData struct {
 	// (issue #3260). Other providers ignore the payload entirely. Sent
 	// raw so the daemon can evolve its schema without a server roundtrip.
 	RuntimeConfig json.RawMessage `json:"runtime_config,omitempty"`
+	// PersonaContext is a short natural-language description of the agent's
+	// current persona state (mood, spontaneity) injected into the runtime
+	// brief as ## Current State. Empty when no persona row exists yet.
+	PersonaContext string `json:"persona_context,omitempty"`
 }
 
 // taskToResponse maps a queue row to its wire shape. workspaceID is threaded

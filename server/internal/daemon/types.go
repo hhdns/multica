@@ -138,6 +138,10 @@ type AgentData struct {
 	// daemon decodes provider-specific fields (e.g. openclaw mode +
 	// gateway endpoint, see issue #3260); other backends ignore it.
 	RuntimeConfig json.RawMessage `json:"runtime_config,omitempty"`
+	// PersonaContext is a short natural-language blurb of the agent's current
+	// mood / spontaneity state, formatted server-side and injected into the
+	// runtime brief as ## Current State. Empty when no persona row exists.
+	PersonaContext string `json:"persona_context,omitempty"`
 }
 
 // SkillData represents a structured skill for task execution.
