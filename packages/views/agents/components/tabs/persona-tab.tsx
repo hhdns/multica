@@ -1,10 +1,11 @@
 "use client";
 
-import { useState } from "react";
+import { useCallback, useState } from "react";
 import { Loader2, Save, Sparkles, ThumbsUp, ThumbsDown, Plus, X } from "lucide-react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import type { Agent, AgentPersona, UpdateAgentPersonaRequest } from "@multica/core/types";
 import { api } from "@multica/core/api";
+import { useWSEvent } from "@multica/core/realtime";
 import { Button } from "@multica/ui/components/ui/button";
 import { Textarea } from "@multica/ui/components/ui/textarea";
 import { Badge } from "@multica/ui/components/ui/badge";
@@ -67,6 +68,19 @@ export function PersonaTab({ agent, canEdit }: PersonaTabProps) {
     queryKey,
     queryFn: () => api.getAgentPersona(agent.id),
   });
+
+  // Invalidate persona when a task for this agent completes or fails —
+  // the server updates mood asynchronously after those events.
+  const onTaskDone = useCallback(
+    (p: unknown) => {
+      if ((p as { agent_id?: string }).agent_id === agent.id) {
+        qc.invalidateQueries({ queryKey });
+      }
+    },
+    [agent.id, qc, queryKey],
+  );
+  useWSEvent("task:completed", onTaskDone);
+  useWSEvent("task:failed", onTaskDone);
 
   const mutation = useMutation({
     mutationFn: (data: UpdateAgentPersonaRequest) =>

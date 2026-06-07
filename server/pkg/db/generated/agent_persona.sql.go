@@ -11,6 +11,29 @@ import (
 	"github.com/jackc/pgx/v5/pgtype"
 )
 
+const countRecentAgentTaskOutcomes = `-- name: CountRecentAgentTaskOutcomes :one
+SELECT
+    COUNT(*) FILTER (WHERE status = 'completed') AS completed_count,
+    COUNT(*) FILTER (WHERE status = 'failed')    AS failed_count
+FROM agent_task_queue
+WHERE agent_id = $1
+  AND status IN ('completed', 'failed')
+  AND completed_at >= now() - interval '7 days'
+LIMIT 1
+`
+
+type CountRecentAgentTaskOutcomesRow struct {
+	CompletedCount int64 `json:"completed_count"`
+	FailedCount    int64 `json:"failed_count"`
+}
+
+func (q *Queries) CountRecentAgentTaskOutcomes(ctx context.Context, agentID pgtype.UUID) (CountRecentAgentTaskOutcomesRow, error) {
+	row := q.db.QueryRow(ctx, countRecentAgentTaskOutcomes, agentID)
+	var i CountRecentAgentTaskOutcomesRow
+	err := row.Scan(&i.CompletedCount, &i.FailedCount)
+	return i, err
+}
+
 const createAgentInteractionSignal = `-- name: CreateAgentInteractionSignal :one
 INSERT INTO agent_interaction_signal (
     agent_id, workspace_id, type, content, weight,
@@ -54,6 +77,60 @@ func (q *Queries) CreateAgentInteractionSignal(ctx context.Context, arg CreateAg
 		&i.SourceUserID,
 		&i.Processed,
 		&i.CreatedAt,
+	)
+	return i, err
+}
+
+const driftAgentPersonaTraits = `-- name: DriftAgentPersonaTraits :one
+UPDATE agent_persona SET
+    trait_thoroughness  = GREATEST(0, LEAST(100, trait_thoroughness  + $2)),
+    trait_verbosity     = GREATEST(0, LEAST(100, trait_verbosity     + $3)),
+    trait_risk_appetite = GREATEST(0, LEAST(100, trait_risk_appetite + $4)),
+    trait_curiosity     = GREATEST(0, LEAST(100, trait_curiosity     + $5)),
+    trait_confidence    = GREATEST(0, LEAST(100, trait_confidence    + $6)),
+    updated_at          = now()
+WHERE agent_id = $1
+RETURNING id, agent_id, workspace_id, trait_thoroughness, trait_verbosity, trait_risk_appetite, trait_curiosity, trait_confidence, strengths, blind_spots, mood, mood_updated_at, variance_level, identity, signal_count, last_synthesized_at, created_at, updated_at
+`
+
+type DriftAgentPersonaTraitsParams struct {
+	AgentID           pgtype.UUID `json:"agent_id"`
+	TraitThoroughness int32       `json:"trait_thoroughness"`
+	TraitVerbosity    int32       `json:"trait_verbosity"`
+	TraitRiskAppetite int32       `json:"trait_risk_appetite"`
+	TraitCuriosity    int32       `json:"trait_curiosity"`
+	TraitConfidence   int32       `json:"trait_confidence"`
+}
+
+func (q *Queries) DriftAgentPersonaTraits(ctx context.Context, arg DriftAgentPersonaTraitsParams) (AgentPersona, error) {
+	row := q.db.QueryRow(ctx, driftAgentPersonaTraits,
+		arg.AgentID,
+		arg.TraitThoroughness,
+		arg.TraitVerbosity,
+		arg.TraitRiskAppetite,
+		arg.TraitCuriosity,
+		arg.TraitConfidence,
+	)
+	var i AgentPersona
+	err := row.Scan(
+		&i.ID,
+		&i.AgentID,
+		&i.WorkspaceID,
+		&i.TraitThoroughness,
+		&i.TraitVerbosity,
+		&i.TraitRiskAppetite,
+		&i.TraitCuriosity,
+		&i.TraitConfidence,
+		&i.Strengths,
+		&i.BlindSpots,
+		&i.Mood,
+		&i.MoodUpdatedAt,
+		&i.VarianceLevel,
+		&i.Identity,
+		&i.SignalCount,
+		&i.LastSynthesizedAt,
+		&i.CreatedAt,
+		&i.UpdatedAt,
 	)
 	return i, err
 }
@@ -143,6 +220,55 @@ func (q *Queries) ListAgentInteractionSignals(ctx context.Context, arg ListAgent
 		return nil, err
 	}
 	return items, nil
+}
+
+const listUnprocessedAgentSignals = `-- name: ListUnprocessedAgentSignals :many
+SELECT id, agent_id, workspace_id, type, content, weight, source_type, source_id, source_user_id, processed, created_at FROM agent_interaction_signal
+WHERE agent_id = $1 AND NOT processed
+ORDER BY created_at ASC
+`
+
+func (q *Queries) ListUnprocessedAgentSignals(ctx context.Context, agentID pgtype.UUID) ([]AgentInteractionSignal, error) {
+	rows, err := q.db.Query(ctx, listUnprocessedAgentSignals, agentID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []AgentInteractionSignal{}
+	for rows.Next() {
+		var i AgentInteractionSignal
+		if err := rows.Scan(
+			&i.ID,
+			&i.AgentID,
+			&i.WorkspaceID,
+			&i.Type,
+			&i.Content,
+			&i.Weight,
+			&i.SourceType,
+			&i.SourceID,
+			&i.SourceUserID,
+			&i.Processed,
+			&i.CreatedAt,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const markAgentSignalsProcessed = `-- name: MarkAgentSignalsProcessed :exec
+UPDATE agent_interaction_signal
+SET processed = true
+WHERE agent_id = $1 AND NOT processed
+`
+
+func (q *Queries) MarkAgentSignalsProcessed(ctx context.Context, agentID pgtype.UUID) error {
+	_, err := q.db.Exec(ctx, markAgentSignalsProcessed, agentID)
+	return err
 }
 
 const updateAgentPersona = `-- name: UpdateAgentPersona :one

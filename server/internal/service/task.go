@@ -1351,6 +1351,9 @@ func (s *TaskService) CompleteTask(ctx context.Context, taskID pgtype.UUID, resu
 	// Broadcast
 	s.broadcastTaskEvent(ctx, protocol.EventTaskCompleted, task)
 
+	// Update persona mood based on recent task outcomes (fire-and-forget).
+	go UpdateAgentMood(context.Background(), s.Queries, task.AgentID)
+
 	return &task, nil
 }
 
@@ -1498,6 +1501,9 @@ func (s *TaskService) FailTask(ctx context.Context, taskID pgtype.UUID, errMsg, 
 
 	// Broadcast
 	s.broadcastTaskEvent(ctx, protocol.EventTaskFailed, task)
+
+	// Update persona mood based on recent task outcomes (fire-and-forget).
+	go UpdateAgentMood(context.Background(), s.Queries, task.AgentID)
 
 	return &task, nil
 }

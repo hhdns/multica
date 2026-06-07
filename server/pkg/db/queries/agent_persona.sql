@@ -49,3 +49,34 @@ SELECT * FROM agent_interaction_signal
 WHERE agent_id = $1
 ORDER BY created_at DESC
 LIMIT $2;
+
+-- name: ListUnprocessedAgentSignals :many
+SELECT * FROM agent_interaction_signal
+WHERE agent_id = $1 AND NOT processed
+ORDER BY created_at ASC;
+
+-- name: MarkAgentSignalsProcessed :exec
+UPDATE agent_interaction_signal
+SET processed = true
+WHERE agent_id = $1 AND NOT processed;
+
+-- name: DriftAgentPersonaTraits :one
+UPDATE agent_persona SET
+    trait_thoroughness  = GREATEST(0, LEAST(100, trait_thoroughness  + $2)),
+    trait_verbosity     = GREATEST(0, LEAST(100, trait_verbosity     + $3)),
+    trait_risk_appetite = GREATEST(0, LEAST(100, trait_risk_appetite + $4)),
+    trait_curiosity     = GREATEST(0, LEAST(100, trait_curiosity     + $5)),
+    trait_confidence    = GREATEST(0, LEAST(100, trait_confidence    + $6)),
+    updated_at          = now()
+WHERE agent_id = $1
+RETURNING *;
+
+-- name: CountRecentAgentTaskOutcomes :one
+SELECT
+    COUNT(*) FILTER (WHERE status = 'completed') AS completed_count,
+    COUNT(*) FILTER (WHERE status = 'failed')    AS failed_count
+FROM agent_task_queue
+WHERE agent_id = $1
+  AND status IN ('completed', 'failed')
+  AND completed_at >= now() - interval '7 days'
+LIMIT 1;
