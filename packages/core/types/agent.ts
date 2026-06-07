@@ -783,3 +783,49 @@ export interface RuntimeLocalSkillImportResult {
   skill?: Skill;
   conflict?: RuntimeLocalSkillImportConflict;
 }
+
+// Persona system
+
+export type PersonaMood = "calm" | "energized" | "cautious" | "playful";
+
+export interface AgentInteractionSignal {
+  id: string;
+  type: "praise" | "criticism" | "task_success" | "task_failure" | "rework_requested";
+  content: string;
+  weight: number;
+  source_type: "comment" | "system";
+  source_user_id: string | null;
+  created_at: string;
+}
+
+export interface AgentPersona {
+  agent_id: string;
+  trait_thoroughness: number;
+  trait_verbosity: number;
+  trait_risk_appetite: number;
+  trait_curiosity: number;
+  trait_confidence: number;
+  strengths: string[];
+  blind_spots: string[];
+  mood: PersonaMood;
+  mood_updated_at: string;
+  variance_level: number;
+  identity: string | null;
+  signal_count: number;
+  last_synthesized_at: string | null;
+  recent_signals: AgentInteractionSignal[];
+  created_at: string;
+  updated_at: string;
+}
+
+export interface UpdateAgentPersonaRequest {
+  trait_thoroughness?: number;
+  trait_verbosity?: number;
+  trait_risk_appetite?: number;
+  trait_curiosity?: number;
+  trait_confidence?: number;
+  strengths?: string[];
+  blind_spots?: string[];
+  variance_level?: number;
+  identity?: string;
+}

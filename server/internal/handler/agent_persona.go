@@ -1,0 +1,246 @@
+package handler
+
+import (
+	"context"
+	"encoding/json"
+	"log/slog"
+	"net/http"
+
+	"github.com/go-chi/chi/v5"
+	"github.com/jackc/pgx/v5/pgtype"
+
+	"github.com/multica-ai/multica/server/internal/logger"
+	"github.com/multica-ai/multica/server/internal/service"
+	db "github.com/multica-ai/multica/server/pkg/db/generated"
+)
+
+// AgentPersonaResponse is the wire shape for GET /api/agents/{id}/persona.
+type AgentPersonaResponse struct {
+	AgentID            string                         `json:"agent_id"`
+	TraitThoroughness  int32                          `json:"trait_thoroughness"`
+	TraitVerbosity     int32                          `json:"trait_verbosity"`
+	TraitRiskAppetite  int32                          `json:"trait_risk_appetite"`
+	TraitCuriosity     int32                          `json:"trait_curiosity"`
+	TraitConfidence    int32                          `json:"trait_confidence"`
+	Strengths          []string                       `json:"strengths"`
+	BlindSpots         []string                       `json:"blind_spots"`
+	Mood               string                         `json:"mood"`
+	MoodUpdatedAt      string                         `json:"mood_updated_at"`
+	VarianceLevel      int32                          `json:"variance_level"`
+	Identity           *string                        `json:"identity"`
+	SignalCount        int32                          `json:"signal_count"`
+	LastSynthesizedAt  *string                        `json:"last_synthesized_at"`
+	RecentSignals      []AgentInteractionSignalResponse `json:"recent_signals"`
+	CreatedAt          string                         `json:"created_at"`
+	UpdatedAt          string                         `json:"updated_at"`
+}
+
+// AgentInteractionSignalResponse is the wire shape for a single signal.
+type AgentInteractionSignalResponse struct {
+	ID           string  `json:"id"`
+	Type         string  `json:"type"`
+	Content      string  `json:"content"`
+	Weight       float32 `json:"weight"`
+	SourceType   string  `json:"source_type"`
+	SourceUserID *string `json:"source_user_id"`
+	CreatedAt    string  `json:"created_at"`
+}
+
+// UpdateAgentPersonaRequest is the wire shape for PUT /api/agents/{id}/persona.
+type UpdateAgentPersonaRequest struct {
+	TraitThoroughness  *int32   `json:"trait_thoroughness"`
+	TraitVerbosity     *int32   `json:"trait_verbosity"`
+	TraitRiskAppetite  *int32   `json:"trait_risk_appetite"`
+	TraitCuriosity     *int32   `json:"trait_curiosity"`
+	TraitConfidence    *int32   `json:"trait_confidence"`
+	Strengths          []string `json:"strengths"`
+	BlindSpots         []string `json:"blind_spots"`
+	VarianceLevel      *int32   `json:"variance_level"`
+	Identity           *string  `json:"identity"`
+}
+
+func personaToResponse(p db.AgentPersona, signals []db.AgentInteractionSignal) AgentPersonaResponse {
+	resp := AgentPersonaResponse{
+		AgentID:           uuidToString(p.AgentID),
+		TraitThoroughness: p.TraitThoroughness,
+		TraitVerbosity:    p.TraitVerbosity,
+		TraitRiskAppetite: p.TraitRiskAppetite,
+		TraitCuriosity:    p.TraitCuriosity,
+		TraitConfidence:   p.TraitConfidence,
+		Strengths:         p.Strengths,
+		BlindSpots:        p.BlindSpots,
+		Mood:              p.Mood,
+		MoodUpdatedAt:     p.MoodUpdatedAt.Time.Format("2006-01-02T15:04:05Z07:00"),
+		VarianceLevel:     p.VarianceLevel,
+		SignalCount:       p.SignalCount,
+		CreatedAt:         p.CreatedAt.Time.Format("2006-01-02T15:04:05Z07:00"),
+		UpdatedAt:         p.UpdatedAt.Time.Format("2006-01-02T15:04:05Z07:00"),
+		RecentSignals:     make([]AgentInteractionSignalResponse, 0, len(signals)),
+	}
+	if p.Identity.Valid {
+		v := p.Identity.String
+		resp.Identity = &v
+	}
+	if p.LastSynthesizedAt.Valid {
+		v := p.LastSynthesizedAt.Time.Format("2006-01-02T15:04:05Z07:00")
+		resp.LastSynthesizedAt = &v
+	}
+	for _, s := range signals {
+		sr := AgentInteractionSignalResponse{
+			ID:         uuidToString(s.ID),
+			Type:       s.Type,
+			Content:    s.Content,
+			Weight:     s.Weight,
+			SourceType: s.SourceType,
+			CreatedAt:  s.CreatedAt.Time.Format("2006-01-02T15:04:05Z07:00"),
+		}
+		if s.SourceUserID.Valid {
+			v := uuidToString(s.SourceUserID)
+			sr.SourceUserID = &v
+		}
+		resp.RecentSignals = append(resp.RecentSignals, sr)
+	}
+	return resp
+}
+
+// GetAgentPersona handles GET /api/agents/{id}/persona.
+// Creates a default persona row if none exists yet.
+func (h *Handler) GetAgentPersona(w http.ResponseWriter, r *http.Request) {
+	agentID := chi.URLParam(r, "id")
+	agent, ok := h.loadAgentForUser(w, r, agentID)
+	if !ok {
+		return
+	}
+
+	ctx := r.Context()
+
+	persona, err := h.Queries.UpsertAgentPersona(ctx, db.UpsertAgentPersonaParams{
+		AgentID:     agent.ID,
+		WorkspaceID: agent.WorkspaceID,
+	})
+	if err != nil {
+		slog.Warn("get agent persona: upsert failed",
+			append(logger.RequestAttrs(r), "error", err, "agent_id", agentID)...)
+		writeError(w, http.StatusInternalServerError, "failed to load persona")
+		return
+	}
+
+	signals, err := h.Queries.ListAgentInteractionSignals(ctx, db.ListAgentInteractionSignalsParams{
+		AgentID: agent.ID,
+		Limit:   20,
+	})
+	if err != nil {
+		slog.Warn("get agent persona: list signals failed",
+			append(logger.RequestAttrs(r), "error", err, "agent_id", agentID)...)
+		signals = nil
+	}
+
+	writeJSON(w, http.StatusOK, personaToResponse(persona, signals))
+}
+
+// UpdateAgentPersona handles PUT /api/agents/{id}/persona.
+func (h *Handler) UpdateAgentPersona(w http.ResponseWriter, r *http.Request) {
+	agentID := chi.URLParam(r, "id")
+	agent, ok := h.loadAgentForUser(w, r, agentID)
+	if !ok {
+		return
+	}
+	if !h.canManageAgent(w, r, agent) {
+		return
+	}
+
+	var req UpdateAgentPersonaRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeError(w, http.StatusBadRequest, "invalid request body")
+		return
+	}
+
+	ctx := r.Context()
+
+	// Load current values so we can merge (partial update pattern).
+	current, err := h.Queries.UpsertAgentPersona(ctx, db.UpsertAgentPersonaParams{
+		AgentID:     agent.ID,
+		WorkspaceID: agent.WorkspaceID,
+	})
+	if err != nil {
+		slog.Warn("update agent persona: upsert failed",
+			append(logger.RequestAttrs(r), "error", err, "agent_id", agentID)...)
+		writeError(w, http.StatusInternalServerError, "failed to load persona")
+		return
+	}
+
+	// Merge request fields over current values.
+	thoroughness := current.TraitThoroughness
+	verbosity := current.TraitVerbosity
+	riskAppetite := current.TraitRiskAppetite
+	curiosity := current.TraitCuriosity
+	confidence := current.TraitConfidence
+	strengths := current.Strengths
+	blindSpots := current.BlindSpots
+	varianceLevel := current.VarianceLevel
+	identity := current.Identity
+
+	if req.TraitThoroughness != nil {
+		thoroughness = *req.TraitThoroughness
+	}
+	if req.TraitVerbosity != nil {
+		verbosity = *req.TraitVerbosity
+	}
+	if req.TraitRiskAppetite != nil {
+		riskAppetite = *req.TraitRiskAppetite
+	}
+	if req.TraitCuriosity != nil {
+		curiosity = *req.TraitCuriosity
+	}
+	if req.TraitConfidence != nil {
+		confidence = *req.TraitConfidence
+	}
+	if req.Strengths != nil {
+		strengths = req.Strengths
+	}
+	if req.BlindSpots != nil {
+		blindSpots = req.BlindSpots
+	}
+	if req.VarianceLevel != nil {
+		varianceLevel = *req.VarianceLevel
+	}
+	if req.Identity != nil {
+		identity = pgtype.Text{String: *req.Identity, Valid: true}
+	}
+
+	updated, err := h.Queries.UpdateAgentPersona(ctx, db.UpdateAgentPersonaParams{
+		AgentID:           agent.ID,
+		TraitThoroughness: thoroughness,
+		TraitVerbosity:    verbosity,
+		TraitRiskAppetite: riskAppetite,
+		TraitCuriosity:    curiosity,
+		TraitConfidence:   confidence,
+		Strengths:         strengths,
+		BlindSpots:        blindSpots,
+		VarianceLevel:     varianceLevel,
+		Identity:          identity,
+	})
+	if err != nil {
+		slog.Warn("update agent persona: update failed",
+			append(logger.RequestAttrs(r), "error", err, "agent_id", agentID)...)
+		writeError(w, http.StatusInternalServerError, "failed to update persona")
+		return
+	}
+
+	signals, err := h.Queries.ListAgentInteractionSignals(ctx, db.ListAgentInteractionSignalsParams{
+		AgentID: agent.ID,
+		Limit:   20,
+	})
+	if err != nil {
+		signals = nil
+	}
+
+	slog.Info("agent persona updated",
+		append(logger.RequestAttrs(r), "agent_id", agentID)...)
+	writeJSON(w, http.StatusOK, personaToResponse(updated, signals))
+}
+
+// RecordTaskSignal writes a system-sourced interaction signal after task completion/failure.
+func RecordTaskSignal(ctx context.Context, q *db.Queries, agentID, workspaceID pgtype.UUID, signalType, content string) {
+	service.RecordCommentSignal(ctx, q, agentID, workspaceID, signalType, 0.5, content, pgtype.UUID{}, pgtype.UUID{})
+}

@@ -1066,6 +1066,12 @@ func (h *Handler) CreateComment(w http.ResponseWriter, r *http.Request) {
 
 	h.triggerTasksForComment(r.Context(), issue, comment, parentComment, authorType, authorID, suppressAgentIDs)
 
+	// Persona signal: when a human comments on an issue assigned to an agent,
+	// detect praise/criticism and record it asynchronously.
+	if authorType == "member" && issue.AssigneeType.Valid && issue.AssigneeType.String == "agent" && issue.AssigneeID.Valid {
+		go h.maybeCapturePersonaSignal(r.Context(), issue.AssigneeID, issue.WorkspaceID, comment.ID, parseUUID(authorID), comment.Content)
+	}
+
 	writeJSON(w, http.StatusCreated, resp)
 }
 
@@ -1779,6 +1785,20 @@ func (h *Handler) ResolveComment(w http.ResponseWriter, r *http.Request) {
 		h.publish(protocol.EventCommentResolved, workspaceID, actorType, actorID, map[string]any{"comment": resp})
 	}
 	writeJSON(w, http.StatusOK, resp)
+}
+
+// maybeCapturePersonaSignal detects praise/criticism in a human comment and
+// records an agent_interaction_signal row. Always called in a goroutine.
+func (h *Handler) maybeCapturePersonaSignal(
+	ctx context.Context,
+	agentID, workspaceID, commentID, userID pgtype.UUID,
+	content string,
+) {
+	signalType, weight, ok := service.DetectCommentSignal(content)
+	if !ok {
+		return
+	}
+	service.RecordCommentSignal(ctx, h.Queries, agentID, workspaceID, signalType, weight, content, commentID, userID)
 }
 
 func (h *Handler) UnresolveComment(w http.ResponseWriter, r *http.Request) {

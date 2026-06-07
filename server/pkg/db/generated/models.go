@@ -46,6 +46,41 @@ type Agent struct {
 	ThinkingLevel      pgtype.Text        `json:"thinking_level"`
 }
 
+type AgentInteractionSignal struct {
+	ID           pgtype.UUID        `json:"id"`
+	AgentID      pgtype.UUID        `json:"agent_id"`
+	WorkspaceID  pgtype.UUID        `json:"workspace_id"`
+	Type         string             `json:"type"`
+	Content      string             `json:"content"`
+	Weight       float32            `json:"weight"`
+	SourceType   string             `json:"source_type"`
+	SourceID     pgtype.UUID        `json:"source_id"`
+	SourceUserID pgtype.UUID        `json:"source_user_id"`
+	Processed    bool               `json:"processed"`
+	CreatedAt    pgtype.Timestamptz `json:"created_at"`
+}
+
+type AgentPersona struct {
+	ID                pgtype.UUID        `json:"id"`
+	AgentID           pgtype.UUID        `json:"agent_id"`
+	WorkspaceID       pgtype.UUID        `json:"workspace_id"`
+	TraitThoroughness int32              `json:"trait_thoroughness"`
+	TraitVerbosity    int32              `json:"trait_verbosity"`
+	TraitRiskAppetite int32              `json:"trait_risk_appetite"`
+	TraitCuriosity    int32              `json:"trait_curiosity"`
+	TraitConfidence   int32              `json:"trait_confidence"`
+	Strengths         []string           `json:"strengths"`
+	BlindSpots        []string           `json:"blind_spots"`
+	Mood              string             `json:"mood"`
+	MoodUpdatedAt     pgtype.Timestamptz `json:"mood_updated_at"`
+	VarianceLevel     int32              `json:"variance_level"`
+	Identity          pgtype.Text        `json:"identity"`
+	SignalCount       int32              `json:"signal_count"`
+	LastSynthesizedAt pgtype.Timestamptz `json:"last_synthesized_at"`
+	CreatedAt         pgtype.Timestamptz `json:"created_at"`
+	UpdatedAt         pgtype.Timestamptz `json:"updated_at"`
+}
+
 type AgentRuntime struct {
 	ID             pgtype.UUID        `json:"id"`
 	WorkspaceID    pgtype.UUID        `json:"workspace_id"`

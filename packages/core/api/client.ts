@@ -20,6 +20,8 @@ import type {
   UpdateAgentRequest,
   AgentEnvResponse,
   UpdateAgentEnvRequest,
+  AgentPersona,
+  UpdateAgentPersonaRequest,
   AgentTask,
   AgentActivityBucket,
   AgentRunCount,
@@ -873,6 +875,17 @@ export class ApiClient {
    */
   async updateAgentEnv(id: string, data: UpdateAgentEnvRequest): Promise<AgentEnvResponse> {
     return this.fetch(`/api/agents/${id}/env`, {
+      method: "PUT",
+      body: JSON.stringify(data),
+    });
+  }
+
+  async getAgentPersona(id: string): Promise<AgentPersona> {
+    return this.fetch(`/api/agents/${id}/persona`);
+  }
+
+  async updateAgentPersona(id: string, data: UpdateAgentPersonaRequest): Promise<AgentPersona> {
+    return this.fetch(`/api/agents/${id}/persona`, {
       method: "PUT",
       body: JSON.stringify(data),
     });

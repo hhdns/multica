@@ -9,6 +9,7 @@ import {
   ListTodo,
   Plug,
   Router,
+  Sparkles,
   Terminal,
   Webhook,
 } from "lucide-react";
@@ -35,6 +36,7 @@ import { CustomArgsTab } from "./tabs/custom-args-tab";
 import { McpConfigTab } from "./tabs/mcp-config-tab";
 import { IntegrationsTab } from "./tabs/integrations-tab";
 import { RuntimeConfigTab } from "./tabs/runtime-config-tab";
+import { PersonaTab } from "./tabs/persona-tab";
 import { ActorIssuesPanel } from "../../common/actor-issues-panel";
 import { useT } from "../../i18n";
 
@@ -47,9 +49,10 @@ export type DetailTab =
   | "custom_args"
   | "mcp_config"
   | "integrations"
-  | "runtime_config";
+  | "runtime_config"
+  | "persona";
 
-const TAB_LABEL_KEY: Record<DetailTab, "activity" | "tasks" | "instructions" | "skills" | "environment" | "custom_args" | "mcp_config" | "integrations" | "runtime_config"> = {
+const TAB_LABEL_KEY: Record<DetailTab, "activity" | "tasks" | "instructions" | "skills" | "environment" | "custom_args" | "mcp_config" | "integrations" | "runtime_config" | "persona"> = {
   activity: "activity",
   tasks: "tasks",
   instructions: "instructions",
@@ -59,6 +62,7 @@ const TAB_LABEL_KEY: Record<DetailTab, "activity" | "tasks" | "instructions" | "
   mcp_config: "mcp_config",
   integrations: "integrations",
   runtime_config: "runtime_config",
+  persona: "persona",
 };
 
 const detailTabs: {
@@ -67,6 +71,7 @@ const detailTabs: {
 }[] = [
   { id: "activity", icon: Activity },
   { id: "tasks", icon: ListTodo },
+  { id: "persona", icon: Sparkles },
   { id: "instructions", icon: FileText },
   { id: "skills", icon: BookOpenText },
   { id: "env", icon: KeyRound },
@@ -79,6 +84,7 @@ const detailTabs: {
 interface AgentOverviewPaneProps {
   agent: Agent;
   runtimes: AgentRuntime[];
+  canEdit: boolean;
   onUpdate: (id: string, data: Record<string, unknown>) => Promise<void>;
   /**
    * One-shot request from a sibling (the inspector's compact Lark status
@@ -116,6 +122,7 @@ interface AgentOverviewPaneProps {
 export function AgentOverviewPane({
   agent,
   runtimes,
+  canEdit,
   onUpdate,
   navIntent,
   onNavIntentHandled,
@@ -276,6 +283,11 @@ export function AgentOverviewPane({
               onSave={(updates) => onUpdate(agent.id, updates)}
               onDirtyChange={setActiveDirty}
             />
+          </TabContent>
+        )}
+        {effectiveTab === "persona" && (
+          <TabContent>
+            <PersonaTab agent={agent} canEdit={canEdit} />
           </TabContent>
         )}
         {effectiveTab === "integrations" && (

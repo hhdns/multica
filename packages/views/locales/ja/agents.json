@@ -208,7 +208,8 @@
     "discard_dialog_title": "保存していない変更を破棄しますか？",
     "discard_dialog_description": "このタブに保存していない変更があります。今移動すると変更は破棄されます。",
     "discard_keep": "編集を続ける",
-    "discard_confirm": "変更を破棄"
+    "discard_confirm": "変更を破棄",
+    "persona": "Persona"
   },
   "create_dialog": {
     "title_create": "エージェントを作成",

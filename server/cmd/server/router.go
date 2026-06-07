@@ -870,6 +870,8 @@ func NewRouterWithOptions(pool *pgxpool.Pool, hub *realtime.Hub, bus *events.Bus
 					// internal/handler/agent_env.go.
 					r.Get("/env", h.GetAgentEnv)
 					r.Put("/env", h.UpdateAgentEnv)
+					r.Get("/persona", h.GetAgentPersona)
+					r.Put("/persona", h.UpdateAgentPersona)
 				})
 			})
 

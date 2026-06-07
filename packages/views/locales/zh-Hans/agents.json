@@ -216,7 +216,8 @@
     "discard_dialog_title": "放弃未保存的修改？",
     "discard_dialog_description": "当前 tab 有未保存的修改，离开会丢弃这些修改。",
     "discard_keep": "继续编辑",
-    "discard_confirm": "放弃修改"
+    "discard_confirm": "放弃修改",
+    "persona": "人格"
   },
   "create_dialog": {
     "title_create": "创建智能体",

@@ -221,7 +221,8 @@
     "discard_dialog_title": "저장하지 않은 변경사항을 버릴까요?",
     "discard_dialog_description": "이 탭에 저장하지 않은 변경사항이 있습니다. 지금 나가면 변경사항이 사라집니다.",
     "discard_keep": "계속 편집",
-    "discard_confirm": "변경사항 버리기"
+    "discard_confirm": "변경사항 버리기",
+    "persona": "Persona"
   },
   "create_dialog": {
     "title_create": "에이전트 만들기",
