@@ -17,46 +17,73 @@ import (
 )
 
 const (
-	anthropicAPIURL = "https://api.anthropic.com/v1/messages"
-	synthesisModel  = "claude-haiku-4-5-20251001"
 	synthesisMaxTok = 1024
 
 	// How many drift batches (each = driftBatchThreshold signals) must pass
 	// before auto-synthesis kicks in. 3 batches × 5 signals = 15 signals.
 	synthesisAfterBatches = 3
+
+	anthropicMessagesPath = "/v1/messages"
+	openAIChatPath        = "/v1/chat/completions"
 )
 
-// anthropicRequest is the minimal request shape for the Messages API.
-type anthropicRequest struct {
-	Model     string              `json:"model"`
-	MaxTokens int                 `json:"max_tokens"`
-	System    string              `json:"system"`
-	Messages  []anthropicMessage  `json:"messages"`
+// synthesisConfig is resolved once per call from environment variables.
+type synthesisConfig struct {
+	// backend is "anthropic", "openai", or "" (disabled).
+	backend  string
+	endpoint string
+	apiKey   string
+	model    string
 }
 
-type anthropicMessage struct {
-	Role    string `json:"role"`
-	Content string `json:"content"`
-}
-
-type anthropicResponse struct {
-	Content []struct {
-		Type string `json:"type"`
-		Text string `json:"text"`
-	} `json:"content"`
-	Error *struct {
-		Type    string `json:"type"`
-		Message string `json:"message"`
-	} `json:"error"`
-}
-
-// SynthesizeAgentInstructions calls Claude Haiku to generate new instructions
-// for the agent based on its current persona data, then persists the result
-// to agent.instructions and marks agent_persona.last_synthesized_at.
+// resolveSynthesisConfig reads environment variables and returns the active
+// synthesis configuration.
 //
-// The caller is responsible for supplying the agent's name and current
-// instructions so we avoid an extra DB round-trip when called from a handler
-// that already has this data. Pass empty strings when unavailable.
+// Resolution order:
+//  1. PERSONA_SYNTHESIS_ENABLED=false → disabled
+//  2. PERSONA_SYNTHESIS_BASE_URL set → openai-compat backend
+//  3. ANTHROPIC_API_KEY set → anthropic backend
+//  4. Neither → disabled
+func resolveSynthesisConfig() synthesisConfig {
+	if strings.EqualFold(os.Getenv("PERSONA_SYNTHESIS_ENABLED"), "false") {
+		return synthesisConfig{}
+	}
+
+	// OpenAI-compat backend (covers Ollama, vLLM, LM Studio, Azure, etc.)
+	if base := os.Getenv("PERSONA_SYNTHESIS_BASE_URL"); base != "" {
+		apiKey := os.Getenv("PERSONA_SYNTHESIS_API_KEY")
+		model := os.Getenv("PERSONA_SYNTHESIS_MODEL")
+		if model == "" {
+			model = "gpt-4o-mini" // sensible fallback for generic compat endpoints
+		}
+		return synthesisConfig{
+			backend:  "openai",
+			endpoint: strings.TrimRight(base, "/") + openAIChatPath,
+			apiKey:   apiKey,
+			model:    model,
+		}
+	}
+
+	// Anthropic direct backend
+	if key := os.Getenv("ANTHROPIC_API_KEY"); key != "" {
+		model := os.Getenv("PERSONA_SYNTHESIS_MODEL")
+		if model == "" {
+			model = "claude-haiku-4-5-20251001"
+		}
+		return synthesisConfig{
+			backend:  "anthropic",
+			endpoint: "https://api.anthropic.com" + anthropicMessagesPath,
+			apiKey:   key,
+			model:    model,
+		}
+	}
+
+	return synthesisConfig{} // disabled
+}
+
+// SynthesizeAgentInstructions calls the configured LLM backend to generate
+// new instructions for the agent based on its current persona data, then
+// persists the result to agent.instructions and marks last_synthesized_at.
 func SynthesizeAgentInstructions(
 	ctx context.Context,
 	q *db.Queries,
@@ -64,9 +91,9 @@ func SynthesizeAgentInstructions(
 	agentName string,
 	currentInstructions string,
 ) error {
-	apiKey := os.Getenv("ANTHROPIC_API_KEY")
-	if apiKey == "" {
-		return fmt.Errorf("ANTHROPIC_API_KEY not set")
+	cfg := resolveSynthesisConfig()
+	if cfg.backend == "" {
+		return fmt.Errorf("persona synthesis is disabled (set ANTHROPIC_API_KEY or PERSONA_SYNTHESIS_BASE_URL)")
 	}
 
 	persona, err := q.GetAgentPersona(ctx, agentID)
@@ -76,10 +103,19 @@ func SynthesizeAgentInstructions(
 
 	prompt := buildSynthesisPrompt(agentName, currentInstructions, persona)
 
-	instructions, err := callClaude(ctx, apiKey, prompt)
-	if err != nil {
-		return fmt.Errorf("claude synthesis call: %w", err)
+	var instructions string
+	switch cfg.backend {
+	case "anthropic":
+		instructions, err = callAnthropic(ctx, cfg, prompt)
+	case "openai":
+		instructions, err = callOpenAICompat(ctx, cfg, prompt)
+	default:
+		return fmt.Errorf("unknown synthesis backend: %s", cfg.backend)
 	}
+	if err != nil {
+		return fmt.Errorf("synthesis call (%s): %w", cfg.backend, err)
+	}
+
 	instructions = strings.TrimSpace(instructions)
 	if instructions == "" {
 		return fmt.Errorf("synthesis returned empty instructions")
@@ -94,8 +130,7 @@ func SynthesizeAgentInstructions(
 	}
 
 	if err2 := q.SetAgentPersonaSynthesizedAt(ctx, agentID); err2 != nil {
-		err = err2
-		slog.Warn("persona: set synthesized_at failed", "error", err, "agent_id", agentID)
+		slog.Warn("persona: set synthesized_at failed", "error", err2, "agent_id", agentID)
 	}
 
 	return nil
@@ -103,25 +138,25 @@ func SynthesizeAgentInstructions(
 
 // MaybeSynthesizeAfterDrift triggers auto-synthesis after every
 // synthesisAfterBatches drift runs. Called from MaybeApplyTraitDrift.
-// Runs synchronously so the caller may want to wrap it in a goroutine.
 func MaybeSynthesizeAfterDrift(
 	ctx context.Context,
 	q *db.Queries,
 	agentID pgtype.UUID,
 ) {
+	if resolveSynthesisConfig().backend == "" {
+		return // synthesis not configured — skip silently
+	}
+
 	persona, err := q.GetAgentPersona(ctx, agentID)
 	if err != nil {
 		return
 	}
 
-	// signal_count increments before drift; after a drift batch the count is a
-	// multiple of driftBatchThreshold. Trigger every synthesisAfterBatches-th batch.
 	batchCount := int(persona.SignalCount) / driftBatchThreshold
 	if batchCount == 0 || batchCount%synthesisAfterBatches != 0 {
 		return
 	}
 
-	// Fetch agent name + current instructions for the prompt.
 	agent, err := q.GetAgent(ctx, agentID)
 	if err != nil {
 		slog.Warn("persona: get agent for synthesis failed", "error", err, "agent_id", agentID)
@@ -137,7 +172,7 @@ func MaybeSynthesizeAfterDrift(
 	}
 }
 
-// buildSynthesisPrompt builds the user-turn message sent to Claude.
+// buildSynthesisPrompt builds the user-turn message sent to the LLM.
 func buildSynthesisPrompt(name, currentInstructions string, p db.AgentPersona) string {
 	if name == "" {
 		name = "this agent"
@@ -200,31 +235,51 @@ text, no preamble, no explanation.`,
 	)
 }
 
-// callClaude sends one user message to the Anthropic Messages API and returns
-// the first text block of the response.
-func callClaude(ctx context.Context, apiKey, userPrompt string) (string, error) {
+// ---- Anthropic backend ----
+
+type anthropicRequest struct {
+	Model     string             `json:"model"`
+	MaxTokens int                `json:"max_tokens"`
+	System    string             `json:"system"`
+	Messages  []anthropicMessage `json:"messages"`
+}
+
+type anthropicMessage struct {
+	Role    string `json:"role"`
+	Content string `json:"content"`
+}
+
+type anthropicResponse struct {
+	Content []struct {
+		Type string `json:"type"`
+		Text string `json:"text"`
+	} `json:"content"`
+	Error *struct {
+		Type    string `json:"type"`
+		Message string `json:"message"`
+	} `json:"error"`
+}
+
+func callAnthropic(ctx context.Context, cfg synthesisConfig, userPrompt string) (string, error) {
 	body, err := json.Marshal(anthropicRequest{
-		Model:     synthesisModel,
+		Model:     cfg.model,
 		MaxTokens: synthesisMaxTok,
 		System:    "You are a concise technical writer. Output only the requested text.",
-		Messages: []anthropicMessage{
-			{Role: "user", Content: userPrompt},
-		},
+		Messages:  []anthropicMessage{{Role: "user", Content: userPrompt}},
 	})
 	if err != nil {
 		return "", err
 	}
 
-	req, err := http.NewRequestWithContext(ctx, http.MethodPost, anthropicAPIURL, bytes.NewReader(body))
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, cfg.endpoint, bytes.NewReader(body))
 	if err != nil {
 		return "", err
 	}
 	req.Header.Set("Content-Type", "application/json")
-	req.Header.Set("x-api-key", apiKey)
+	req.Header.Set("x-api-key", cfg.apiKey)
 	req.Header.Set("anthropic-version", "2023-06-01")
 
-	client := &http.Client{Timeout: 30 * time.Second}
-	resp, err := client.Do(req)
+	resp, err := (&http.Client{Timeout: 30 * time.Second}).Do(req)
 	if err != nil {
 		return "", err
 	}
@@ -248,4 +303,74 @@ func callClaude(ctx context.Context, apiKey, userPrompt string) (string, error) 
 		}
 	}
 	return "", fmt.Errorf("no text block in response (status %d)", resp.StatusCode)
+}
+
+// ---- OpenAI-compat backend ----
+
+type openAIRequest struct {
+	Model     string          `json:"model"`
+	MaxTokens int             `json:"max_tokens"`
+	Messages  []openAIMessage `json:"messages"`
+}
+
+type openAIMessage struct {
+	Role    string `json:"role"`
+	Content string `json:"content"`
+}
+
+type openAIResponse struct {
+	Choices []struct {
+		Message struct {
+			Content string `json:"content"`
+		} `json:"message"`
+	} `json:"choices"`
+	Error *struct {
+		Message string `json:"message"`
+	} `json:"error"`
+}
+
+func callOpenAICompat(ctx context.Context, cfg synthesisConfig, userPrompt string) (string, error) {
+	body, err := json.Marshal(openAIRequest{
+		Model:     cfg.model,
+		MaxTokens: synthesisMaxTok,
+		Messages: []openAIMessage{
+			{Role: "system", Content: "You are a concise technical writer. Output only the requested text."},
+			{Role: "user", Content: userPrompt},
+		},
+	})
+	if err != nil {
+		return "", err
+	}
+
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, cfg.endpoint, bytes.NewReader(body))
+	if err != nil {
+		return "", err
+	}
+	req.Header.Set("Content-Type", "application/json")
+	if cfg.apiKey != "" {
+		req.Header.Set("Authorization", "Bearer "+cfg.apiKey)
+	}
+
+	resp, err := (&http.Client{Timeout: 30 * time.Second}).Do(req)
+	if err != nil {
+		return "", err
+	}
+	defer resp.Body.Close()
+
+	raw, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return "", err
+	}
+
+	var or openAIResponse
+	if err := json.Unmarshal(raw, &or); err != nil {
+		return "", fmt.Errorf("unmarshal response: %w (status %d)", err, resp.StatusCode)
+	}
+	if or.Error != nil {
+		return "", fmt.Errorf("api error: %s", or.Error.Message)
+	}
+	if len(or.Choices) > 0 {
+		return or.Choices[0].Message.Content, nil
+	}
+	return "", fmt.Errorf("no choices in response (status %d)", resp.StatusCode)
 }

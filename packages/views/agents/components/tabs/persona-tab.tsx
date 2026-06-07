@@ -90,10 +90,15 @@ export function PersonaTab({ agent, canEdit }: PersonaTabProps) {
     },
   });
 
+  const [synthesisError, setSynthesisError] = useState<string | null>(null);
   const synthesize = useMutation({
     mutationFn: () => api.synthesizeAgentPersona(agent.id),
     onSuccess: (updated) => {
       qc.setQueryData(queryKey, updated);
+      setSynthesisError(null);
+    },
+    onError: (err: Error) => {
+      setSynthesisError(err.message);
     },
   });
 
@@ -117,6 +122,7 @@ export function PersonaTab({ agent, canEdit }: PersonaTabProps) {
         canEdit={canEdit}
         onSynthesize={() => synthesize.mutate()}
         synthesizing={synthesize.isPending}
+        error={synthesisError}
       />
       {persona.recent_signals.length > 0 && <SignalsSection persona={persona} />}
     </div>
@@ -408,11 +414,13 @@ function SynthesizeSection({
   canEdit,
   onSynthesize,
   synthesizing,
+  error,
 }: {
   persona: AgentPersona;
   canEdit: boolean;
   onSynthesize: () => void;
   synthesizing: boolean;
+  error: string | null;
 }) {
   const lastSynth = persona.last_synthesized_at
     ? new Date(persona.last_synthesized_at).toLocaleString()
@@ -424,7 +432,7 @@ function SynthesizeSection({
       <div className="flex items-center gap-3 rounded-lg border bg-muted/30 px-4 py-3">
         <div className="min-w-0 flex-1">
           <p className="text-xs text-foreground">
-            Re-generate this agent&apos;s instructions from its current persona data using Claude.
+            Re-generate this agent&apos;s instructions from its current persona data using an LLM.
           </p>
           {lastSynth ? (
             <p className="mt-0.5 text-[10px] text-muted-foreground">Last synthesized: {lastSynth}</p>
@@ -449,6 +457,13 @@ function SynthesizeSection({
           </Button>
         )}
       </div>
+      {error && (
+        <p className="text-[11px] text-destructive">
+          {error.includes("disabled") || error.includes("ANTHROPIC_API_KEY") || error.includes("PERSONA_SYNTHESIS")
+            ? "Synthesis is not configured. Set ANTHROPIC_API_KEY (Anthropic) or PERSONA_SYNTHESIS_BASE_URL (local LLM) on the server."
+            : error}
+        </p>
+      )}
     </div>
   );
 }
