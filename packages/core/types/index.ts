@@ -60,6 +60,7 @@ export type {
   IssueUsageSummary,
   AgentPersona,
   AgentInteractionSignal,
+  AgentMemory,
   PersonaMood,
   UpdateAgentPersonaRequest,
 } from "./agent";

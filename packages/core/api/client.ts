@@ -897,6 +897,10 @@ export class ApiClient {
     });
   }
 
+  async listAgentMemories(id: string): Promise<import("../types").AgentMemory[]> {
+    return this.fetch(`/api/agents/${id}/memories`);
+  }
+
   async restoreAgent(id: string): Promise<Agent> {
     return this.fetch(`/api/agents/${id}/restore`, { method: "POST" });
   }

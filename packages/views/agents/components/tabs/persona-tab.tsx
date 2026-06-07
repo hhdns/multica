@@ -1,9 +1,9 @@
 "use client";
 
 import { useCallback, useState } from "react";
-import { Loader2, Save, Sparkles, ThumbsUp, ThumbsDown, Plus, X, Wand2 } from "lucide-react";
+import { Loader2, Save, Sparkles, ThumbsUp, ThumbsDown, Plus, X, Wand2, Brain, ChevronDown, ChevronRight } from "lucide-react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
-import type { Agent, AgentPersona, UpdateAgentPersonaRequest } from "@multica/core/types";
+import type { Agent, AgentPersona, AgentMemory, UpdateAgentPersonaRequest } from "@multica/core/types";
 import { api } from "@multica/core/api";
 import { useWSEvent } from "@multica/core/realtime";
 import { Button } from "@multica/ui/components/ui/button";
@@ -125,6 +125,7 @@ export function PersonaTab({ agent, canEdit }: PersonaTabProps) {
         error={synthesisError}
       />
       {persona.recent_signals.length > 0 && <SignalsSection persona={persona} />}
+      <MemoriesSection agentId={agent.id} />
     </div>
   );
 }
@@ -463,6 +464,70 @@ function SynthesizeSection({
             ? "Synthesis is not configured. Set ANTHROPIC_API_KEY (Anthropic) or PERSONA_SYNTHESIS_BASE_URL (local LLM) on the server."
             : error}
         </p>
+      )}
+    </div>
+  );
+}
+
+const SENTIMENT_COLORS: Record<string, string> = {
+  positive: "text-emerald-500",
+  negative: "text-rose-500",
+  neutral: "text-muted-foreground",
+};
+
+const SENTIMENT_LABELS: Record<string, string> = {
+  positive: "✓",
+  negative: "✗",
+  neutral: "·",
+};
+
+function MemoriesSection({ agentId }: { agentId: string }) {
+  const [open, setOpen] = useState(false);
+
+  const { data: memories, isLoading } = useQuery({
+    queryKey: ["agent-memories", agentId],
+    queryFn: () => api.listAgentMemories(agentId),
+    enabled: open,
+  });
+
+  return (
+    <div className="flex flex-col gap-2 pb-4">
+      <button
+        className="flex items-center gap-2 text-xs font-semibold uppercase tracking-wide text-muted-foreground hover:text-foreground"
+        onClick={() => setOpen((v) => !v)}
+      >
+        <Brain className="h-3.5 w-3.5" />
+        Episodic Memory
+        {open ? <ChevronDown className="ml-auto h-3 w-3" /> : <ChevronRight className="ml-auto h-3 w-3" />}
+      </button>
+      {open && (
+        <div className="flex flex-col rounded-lg border">
+          {isLoading && (
+            <div className="flex items-center justify-center py-6">
+              <Loader2 className="h-4 w-4 animate-spin text-muted-foreground" />
+            </div>
+          )}
+          {!isLoading && (!memories || memories.length === 0) && (
+            <p className="px-3 py-4 text-xs text-muted-foreground">No memories yet. Memories are recorded automatically after tasks complete.</p>
+          )}
+          {memories && memories.length > 0 && memories.map((m: AgentMemory) => (
+            <div key={m.id} className="flex items-start gap-2.5 border-b px-3 py-2.5 last:border-b-0">
+              <span className={`mt-0.5 shrink-0 text-xs font-bold ${SENTIMENT_COLORS[m.sentiment]}`}>
+                {SENTIMENT_LABELS[m.sentiment]}
+              </span>
+              <div className="min-w-0 flex-1">
+                <p className="text-xs text-foreground">{m.content}</p>
+                <div className="mt-0.5 flex items-center gap-2 text-[10px] text-muted-foreground">
+                  <span className="capitalize">{m.category.replace(/_/g, " ")}</span>
+                  <span>·</span>
+                  <span>{new Date(m.created_at).toLocaleDateString()}</span>
+                  {m.has_embedding && <span className="rounded bg-muted px-1 py-px font-mono">vec</span>}
+                  <span className="ml-auto">imp {m.importance.toFixed(2)}</span>
+                </div>
+              </div>
+            </div>
+          ))}
+        </div>
       )}
     </div>
   );

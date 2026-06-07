@@ -829,3 +829,14 @@ export interface UpdateAgentPersonaRequest {
   variance_level?: number;
   identity?: string;
 }
+
+export interface AgentMemory {
+  id: string;
+  content: string;
+  category: string;
+  sentiment: "positive" | "negative" | "neutral";
+  importance: number;
+  has_embedding: boolean;
+  source_issue_id?: string;
+  created_at: string;
+}

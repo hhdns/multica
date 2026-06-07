@@ -311,6 +311,58 @@ func (h *Handler) SynthesizeAgentPersona(w http.ResponseWriter, r *http.Request)
 	writeJSON(w, http.StatusAccepted, personaToResponse(persona, signals))
 }
 
+// AgentMemoryResponse is the wire shape for a single memory entry.
+type AgentMemoryResponse struct {
+	ID            string  `json:"id"`
+	Content       string  `json:"content"`
+	Category      string  `json:"category"`
+	Sentiment     string  `json:"sentiment"`
+	Importance    float32 `json:"importance"`
+	HasEmbedding  bool    `json:"has_embedding"`
+	SourceIssueID *string `json:"source_issue_id,omitempty"`
+	CreatedAt     string  `json:"created_at"`
+}
+
+// ListAgentMemories handles GET /api/agents/{id}/memories.
+// Returns the most recent memories for debug purposes.
+func (h *Handler) ListAgentMemories(w http.ResponseWriter, r *http.Request) {
+	agentID := chi.URLParam(r, "id")
+	agent, ok := h.loadAgentForUser(w, r, agentID)
+	if !ok {
+		return
+	}
+
+	memories, err := h.Queries.ListAgentMemories(r.Context(), db.ListAgentMemoriesParams{
+		AgentID: agent.ID,
+		Limit:   50,
+	})
+	if err != nil {
+		slog.Warn("list agent memories: query failed",
+			append(logger.RequestAttrs(r), "error", err, "agent_id", agentID)...)
+		writeError(w, http.StatusInternalServerError, "failed to list memories")
+		return
+	}
+
+	out := make([]AgentMemoryResponse, 0, len(memories))
+	for _, m := range memories {
+		r2 := AgentMemoryResponse{
+			ID:           uuidToString(m.ID),
+			Content:      m.Content,
+			Category:     m.Category,
+			Sentiment:    m.Sentiment,
+			Importance:   m.Importance,
+			HasEmbedding: len(m.Embedding.Slice()) > 0,
+			CreatedAt:    m.CreatedAt.Time.Format("2006-01-02T15:04:05Z07:00"),
+		}
+		if m.SourceIssueID.Valid {
+			v := uuidToString(m.SourceIssueID)
+			r2.SourceIssueID = &v
+		}
+		out = append(out, r2)
+	}
+	writeJSON(w, http.StatusOK, out)
+}
+
 // RecordTaskSignal writes a system-sourced interaction signal after task completion/failure.
 func RecordTaskSignal(ctx context.Context, q *db.Queries, agentID, workspaceID pgtype.UUID, signalType, content string) {
 	service.RecordCommentSignal(ctx, q, agentID, workspaceID, signalType, 0.5, content, pgtype.UUID{}, pgtype.UUID{})
