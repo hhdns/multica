@@ -1,9 +1,9 @@
 "use client";
 
 import { useCallback, useState } from "react";
-import { Loader2, Save, Sparkles, ThumbsUp, ThumbsDown, Plus, X, Wand2, Brain, ChevronDown, ChevronRight } from "lucide-react";
+import { Loader2, Save, Sparkles, ThumbsUp, ThumbsDown, Plus, X, Wand2, Brain, ChevronDown, ChevronRight, Cpu } from "lucide-react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
-import type { Agent, AgentPersona, AgentMemory, UpdateAgentPersonaRequest } from "@multica/core/types";
+import type { Agent, AgentPersona, AgentMemory, PersonaLLMCall, UpdateAgentPersonaRequest } from "@multica/core/types";
 import { api } from "@multica/core/api";
 import { useConfigStore } from "@multica/core/config";
 import { useWSEvent } from "@multica/core/realtime";
@@ -130,6 +130,7 @@ export function PersonaTab({ agent, canEdit }: PersonaTabProps) {
       />
       {persona.recent_signals.length > 0 && <SignalsSection persona={persona} />}
       <MemoriesSection agentId={agent.id} workspaceId={agent.workspace_id} canEdit={canEdit} />
+      <LLMCallsSection agentId={agent.id} />
     </div>
   );
 }
@@ -576,6 +577,80 @@ function MemoriesSection({
               </div>
             </div>
           ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
+const CALL_TYPE_LABELS: Record<string, string> = {
+  synthesis: "Synthesis",
+  classification: "Classification",
+  compaction: "Compaction",
+  emotional_impression: "Emotional",
+  breakthrough_impression: "Breakthrough",
+};
+
+function LLMCallsSection({ agentId }: { agentId: string }) {
+  const [open, setOpen] = useState(false);
+
+  const { data: calls, isLoading } = useQuery({
+    queryKey: ["agent-llm-calls", agentId],
+    queryFn: () => api.listAgentLLMCalls(agentId),
+    enabled: open,
+  });
+
+  const totalIn = calls?.reduce((s, c) => s + c.input_tokens, 0) ?? 0;
+  const totalOut = calls?.reduce((s, c) => s + c.output_tokens, 0) ?? 0;
+
+  return (
+    <div className="flex flex-col gap-2 pb-4">
+      <button
+        className="flex items-center gap-2 text-xs font-semibold uppercase tracking-wide text-muted-foreground hover:text-foreground"
+        onClick={() => setOpen((v) => !v)}
+      >
+        <Cpu className="h-3.5 w-3.5" />
+        LLM Token Usage
+        {open ? <ChevronDown className="ml-auto h-3 w-3" /> : <ChevronRight className="ml-auto h-3 w-3" />}
+      </button>
+      {open && (
+        <div className="flex flex-col rounded-lg border">
+          {isLoading && (
+            <div className="flex items-center justify-center py-6">
+              <Loader2 className="h-4 w-4 animate-spin text-muted-foreground" />
+            </div>
+          )}
+          {!isLoading && (!calls || calls.length === 0) && (
+            <p className="px-3 py-4 text-xs text-muted-foreground">No LLM calls recorded yet.</p>
+          )}
+          {calls && calls.length > 0 && (
+            <>
+              <div className="flex items-center gap-4 border-b px-3 py-2 text-[10px] text-muted-foreground">
+                <span>Last {calls.length} calls</span>
+                <span className="ml-auto tabular-nums">
+                  {(totalIn + totalOut).toLocaleString()} tokens total
+                  <span className="ml-2 opacity-70">({totalIn.toLocaleString()} in / {totalOut.toLocaleString()} out)</span>
+                </span>
+              </div>
+              {calls.map((c: PersonaLLMCall, i: number) => (
+                <div key={i} className="flex items-center gap-2.5 border-b px-3 py-2 last:border-b-0">
+                  <span className="w-24 shrink-0 text-[10px] font-medium text-muted-foreground">
+                    {CALL_TYPE_LABELS[c.call_type] ?? c.call_type}
+                  </span>
+                  <span className="min-w-0 flex-1 truncate text-[10px] text-foreground/70 font-mono">{c.model}</span>
+                  <span className="shrink-0 tabular-nums text-[10px] text-muted-foreground">
+                    {c.input_tokens.toLocaleString()}↑ {c.output_tokens.toLocaleString()}↓
+                  </span>
+                  <span className="shrink-0 text-[10px] text-muted-foreground/60">
+                    {c.latency_ms}ms
+                  </span>
+                  <span className="shrink-0 text-[10px] text-muted-foreground/50">
+                    {new Date(c.created_at).toLocaleDateString()}
+                  </span>
+                </div>
+              ))}
+            </>
+          )}
         </div>
       )}
     </div>

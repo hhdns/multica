@@ -842,3 +842,13 @@ export interface AgentMemory {
   source_issue_id?: string;
   created_at: string;
 }
+
+export interface PersonaLLMCall {
+  call_type: string;
+  backend: string;
+  model: string;
+  input_tokens: number;
+  output_tokens: number;
+  latency_ms: number;
+  created_at: string;
+}

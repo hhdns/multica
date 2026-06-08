@@ -901,6 +901,10 @@ export class ApiClient {
     return this.fetch(`/api/agents/${id}/memories`);
   }
 
+  async listAgentLLMCalls(id: string): Promise<import("../types").PersonaLLMCall[]> {
+    return this.fetch(`/api/agents/${id}/llm-calls`);
+  }
+
   async rebuildWorkspaceEmbeddings(wsId: string): Promise<{ status: string }> {
     return this.fetch(`/api/workspaces/${wsId}/memories/rebuild-embeddings`, {
       method: "POST",

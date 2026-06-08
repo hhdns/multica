@@ -367,6 +367,51 @@ func (h *Handler) ListAgentMemories(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, out)
 }
 
+// PersonaLLMCallResponse is the wire shape for a single LLM call record.
+type PersonaLLMCallResponse struct {
+	CallType     string `json:"call_type"`
+	Backend      string `json:"backend"`
+	Model        string `json:"model"`
+	InputTokens  int32  `json:"input_tokens"`
+	OutputTokens int32  `json:"output_tokens"`
+	LatencyMs    int32  `json:"latency_ms"`
+	CreatedAt    string `json:"created_at"`
+}
+
+// ListAgentLLMCalls handles GET /api/agents/{id}/llm-calls.
+func (h *Handler) ListAgentLLMCalls(w http.ResponseWriter, r *http.Request) {
+	agentID := chi.URLParam(r, "id")
+	agent, ok := h.loadAgentForUser(w, r, agentID)
+	if !ok {
+		return
+	}
+
+	calls, err := h.Queries.ListAgentLLMCalls(r.Context(), db.ListAgentLLMCallsParams{
+		AgentID: agent.ID,
+		Limit:   100,
+	})
+	if err != nil {
+		slog.Warn("list agent llm calls: query failed",
+			append(logger.RequestAttrs(r), "error", err, "agent_id", agentID)...)
+		writeError(w, http.StatusInternalServerError, "failed to list llm calls")
+		return
+	}
+
+	out := make([]PersonaLLMCallResponse, 0, len(calls))
+	for _, c := range calls {
+		out = append(out, PersonaLLMCallResponse{
+			CallType:     c.CallType,
+			Backend:      c.Backend,
+			Model:        c.Model,
+			InputTokens:  c.InputTokens,
+			OutputTokens: c.OutputTokens,
+			LatencyMs:    c.LatencyMs,
+			CreatedAt:    c.CreatedAt.Time.Format("2006-01-02T15:04:05Z07:00"),
+		})
+	}
+	writeJSON(w, http.StatusOK, out)
+}
+
 // RecordTaskSignal writes a system-sourced interaction signal after task completion/failure.
 func RecordTaskSignal(ctx context.Context, q *db.Queries, agentID, workspaceID pgtype.UUID, signalType, content string) {
 	service.RecordCommentSignal(ctx, q, agentID, workspaceID, signalType, 0.5, content, pgtype.UUID{}, pgtype.UUID{})

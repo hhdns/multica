@@ -61,6 +61,7 @@ export type {
   AgentPersona,
   AgentInteractionSignal,
   AgentMemory,
+  PersonaLLMCall,
   PersonaMood,
   UpdateAgentPersonaRequest,
 } from "./agent";
