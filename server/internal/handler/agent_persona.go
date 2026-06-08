@@ -313,14 +313,16 @@ func (h *Handler) SynthesizeAgentPersona(w http.ResponseWriter, r *http.Request)
 
 // AgentMemoryResponse is the wire shape for a single memory entry.
 type AgentMemoryResponse struct {
-	ID            string  `json:"id"`
-	Content       string  `json:"content"`
-	Category      string  `json:"category"`
-	Sentiment     string  `json:"sentiment"`
-	Importance    float32 `json:"importance"`
-	HasEmbedding  bool    `json:"has_embedding"`
-	SourceIssueID *string `json:"source_issue_id,omitempty"`
-	CreatedAt     string  `json:"created_at"`
+	ID             string  `json:"id"`
+	Content        string  `json:"content"`
+	Category       string  `json:"category"`
+	Sentiment      string  `json:"sentiment"`
+	Importance     float32 `json:"importance"`
+	HasEmbedding   bool    `json:"has_embedding"`
+	IsConsolidated bool    `json:"is_consolidated"`
+	SourceCount    int32   `json:"source_count"`
+	SourceIssueID  *string `json:"source_issue_id,omitempty"`
+	CreatedAt      string  `json:"created_at"`
 }
 
 // ListAgentMemories handles GET /api/agents/{id}/memories.
@@ -346,13 +348,15 @@ func (h *Handler) ListAgentMemories(w http.ResponseWriter, r *http.Request) {
 	out := make([]AgentMemoryResponse, 0, len(memories))
 	for _, m := range memories {
 		r2 := AgentMemoryResponse{
-			ID:           uuidToString(m.ID),
-			Content:      m.Content,
-			Category:     m.Category,
-			Sentiment:    m.Sentiment,
-			Importance:   m.Importance,
-			HasEmbedding: len(m.Embedding.Slice()) > 0,
-			CreatedAt:    m.CreatedAt.Time.Format("2006-01-02T15:04:05Z07:00"),
+			ID:             uuidToString(m.ID),
+			Content:        m.Content,
+			Category:       m.Category,
+			Sentiment:      m.Sentiment,
+			Importance:     m.Importance,
+			HasEmbedding:   len(m.Embedding.Slice()) > 0,
+			IsConsolidated: m.IsConsolidated,
+			SourceCount:    m.SourceCount,
+			CreatedAt:      m.CreatedAt.Time.Format("2006-01-02T15:04:05Z07:00"),
 		}
 		if m.SourceIssueID.Valid {
 			v := uuidToString(m.SourceIssueID)

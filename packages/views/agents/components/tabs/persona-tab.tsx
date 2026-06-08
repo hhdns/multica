@@ -531,6 +531,11 @@ function MemoriesSection({ agentId }: { agentId: string }) {
                   <span>·</span>
                   <span>{new Date(m.created_at).toLocaleDateString()}</span>
                   {m.has_embedding && <span className="rounded bg-muted px-1 py-px font-mono">vec</span>}
+                  {m.is_consolidated && m.source_count > 1 && (
+                    <span className="rounded bg-violet-100 px-1 py-px text-violet-700 dark:bg-violet-950/50 dark:text-violet-400">
+                      merged from {m.source_count}
+                    </span>
+                  )}
                   <span className="ml-auto">imp {m.importance.toFixed(2)}</span>
                 </div>
               </div>

@@ -837,6 +837,8 @@ export interface AgentMemory {
   sentiment: "positive" | "negative" | "neutral";
   importance: number;
   has_embedding: boolean;
+  is_consolidated: boolean;
+  source_count: number;
   source_issue_id?: string;
   created_at: string;
 }
