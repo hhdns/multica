@@ -106,9 +106,9 @@ func SynthesizeAgentInstructions(
 	var instructions string
 	switch cfg.backend {
 	case "anthropic":
-		instructions, err = callAnthropic(ctx, cfg, prompt)
+		instructions, err = callAnthropic(ctx, cfg, prompt, synthesisMaxTok)
 	case "openai":
-		instructions, err = callOpenAICompat(ctx, cfg, prompt)
+		instructions, err = callOpenAICompat(ctx, cfg, prompt, synthesisMaxTok)
 	default:
 		return fmt.Errorf("unknown synthesis backend: %s", cfg.backend)
 	}
@@ -260,10 +260,10 @@ type anthropicResponse struct {
 	} `json:"error"`
 }
 
-func callAnthropic(ctx context.Context, cfg synthesisConfig, userPrompt string) (string, error) {
+func callAnthropic(ctx context.Context, cfg synthesisConfig, userPrompt string, maxTok int) (string, error) {
 	body, err := json.Marshal(anthropicRequest{
 		Model:     cfg.model,
-		MaxTokens: synthesisMaxTok,
+		MaxTokens: maxTok,
 		System:    "You are a concise technical writer. Output only the requested text.",
 		Messages:  []anthropicMessage{{Role: "user", Content: userPrompt}},
 	})
@@ -329,10 +329,10 @@ type openAIResponse struct {
 	} `json:"error"`
 }
 
-func callOpenAICompat(ctx context.Context, cfg synthesisConfig, userPrompt string) (string, error) {
+func callOpenAICompat(ctx context.Context, cfg synthesisConfig, userPrompt string, maxTok int) (string, error) {
 	body, err := json.Marshal(openAIRequest{
 		Model:     cfg.model,
-		MaxTokens: synthesisMaxTok,
+		MaxTokens: maxTok,
 		Messages: []openAIMessage{
 			{Role: "system", Content: "You are a concise technical writer. Output only the requested text."},
 			{Role: "user", Content: userPrompt},

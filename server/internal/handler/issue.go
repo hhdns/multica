@@ -2579,6 +2579,12 @@ func (h *Handler) UpdateIssue(w http.ResponseWriter, r *http.Request) {
 		h.notifyParentOfChildDone(r.Context(), prevIssue, issue, actorType, actorID)
 	}
 
+	// Behavioral persona signals: issue lifecycle events (close/reopen/reassign)
+	// carry implicit feedback about agent performance.
+	if statusChanged || assigneeChanged {
+		go h.maybeRecordIssueLifecycleSignals(context.Background(), prevIssue, issue, actorType)
+	}
+
 	writeJSON(w, http.StatusOK, resp)
 }
 
@@ -3136,4 +3142,46 @@ func (h *Handler) BatchDeleteIssues(w http.ResponseWriter, r *http.Request) {
 
 	slog.Info("batch delete issues", append(logger.RequestAttrs(r), "count", deleted)...)
 	writeJSON(w, http.StatusOK, map[string]any{"deleted": deleted})
+}
+
+// maybeRecordIssueLifecycleSignals fires behavioral persona signals when a human
+// makes changes that implicitly signal satisfaction or dissatisfaction with agent work.
+// Always called in a goroutine; errors are logged only.
+func (h *Handler) maybeRecordIssueLifecycleSignals(ctx context.Context, prev, curr db.Issue, actorType string) {
+	// Only record signals for human-initiated actions, not agent self-updates.
+	if actorType != "member" {
+		return
+	}
+
+	statusChanged := prev.Status != curr.Status
+	assigneeChanged := prev.AssigneeType.String != curr.AssigneeType.String ||
+		uuidToString(prev.AssigneeID) != uuidToString(curr.AssigneeID)
+
+	// Human closes an issue that was assigned to an agent → implicit approval.
+	if statusChanged &&
+		(curr.Status == "done" || curr.Status == "cancelled") &&
+		prev.AssigneeType.String == "agent" && prev.AssigneeID.Valid {
+		service.RecordCommentSignal(ctx, h.Queries, prev.AssigneeID, prev.WorkspaceID,
+			service.SignalTypeSuccess, 0.7, "Issue marked "+curr.Status+" by a team member",
+			pgtype.UUID{}, pgtype.UUID{})
+	}
+
+	// Human reopens a done/cancelled issue assigned to an agent → implicit rejection.
+	if statusChanged &&
+		(prev.Status == "done" || prev.Status == "cancelled") &&
+		curr.Status != "done" && curr.Status != "cancelled" &&
+		curr.AssigneeType.String == "agent" && curr.AssigneeID.Valid {
+		service.RecordCommentSignal(ctx, h.Queries, curr.AssigneeID, curr.WorkspaceID,
+			service.SignalTypeFailure, 0.8, "Issue reopened after being marked "+prev.Status,
+			pgtype.UUID{}, pgtype.UUID{})
+	}
+
+	// Human reassigns the issue away from an agent to a non-agent → implicit criticism.
+	if assigneeChanged &&
+		prev.AssigneeType.String == "agent" && prev.AssigneeID.Valid &&
+		curr.AssigneeType.String != "agent" {
+		service.RecordCommentSignal(ctx, h.Queries, prev.AssigneeID, prev.WorkspaceID,
+			service.SignalTypeCriticism, 0.6, "Issue reassigned from agent to a team member",
+			pgtype.UUID{}, pgtype.UUID{})
+	}
 }

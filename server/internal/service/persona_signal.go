@@ -2,6 +2,8 @@ package service
 
 import (
 	"context"
+	"encoding/json"
+	"fmt"
 	"log/slog"
 	"math/rand/v2"
 	"strings"
@@ -22,11 +24,84 @@ const (
 // before a trait-drift pass runs. Keeps the drift from being too reactive.
 const driftBatchThreshold = 5
 
+// classifyMaxTok is the token budget for LLM-based comment classification.
+// Tight because we only need a small JSON object back.
+const classifyMaxTok = 80
+
+// ClassifyCommentSignal detects praise or criticism in a human comment.
+// If a synthesis backend is configured (Anthropic or OpenAI-compat), it uses
+// an LLM for accurate classification. Otherwise it falls back to keyword matching.
+func ClassifyCommentSignal(ctx context.Context, content string) (signalType string, weight float32, ok bool) {
+	cfg := resolveSynthesisConfig()
+	if cfg.backend != "" {
+		st, w, err := classifyCommentWithLLM(ctx, cfg, content)
+		if err != nil {
+			slog.Warn("persona: LLM comment classification failed, using keywords", "error", err)
+		} else {
+			if st == "neutral" || st == "" {
+				return "", 0, false
+			}
+			return st, w, true
+		}
+	}
+	return detectCommentKeywords(content)
+}
+
+// classifyCommentWithLLM asks the configured LLM backend to classify a comment.
+// Returns signalType ("praise"/"criticism"/"neutral") and weight (0.1–1.0).
+func classifyCommentWithLLM(ctx context.Context, cfg synthesisConfig, content string) (signalType string, weight float32, err error) {
+	prompt := fmt.Sprintf(
+		`Classify this comment about an AI agent's work. Output ONLY JSON with no explanation: {"type":"praise"|"criticism"|"neutral","weight":0.1-1.0}
+Weight: 1.0=very strong, 0.5=moderate, 0.1=subtle.
+
+Comment: %q`, content)
+
+	var raw string
+	switch cfg.backend {
+	case "anthropic":
+		raw, err = callAnthropic(ctx, cfg, prompt, classifyMaxTok)
+	case "openai":
+		raw, err = callOpenAICompat(ctx, cfg, prompt, classifyMaxTok)
+	default:
+		return "", 0, fmt.Errorf("unknown backend: %s", cfg.backend)
+	}
+	if err != nil {
+		return "", 0, err
+	}
+
+	// Strip markdown fences or leading text if the model wraps its output.
+	raw = strings.TrimSpace(raw)
+	if i := strings.Index(raw, "{"); i > 0 {
+		raw = raw[i:]
+	}
+	if i := strings.LastIndex(raw, "}"); i >= 0 && i < len(raw)-1 {
+		raw = raw[:i+1]
+	}
+
+	var result struct {
+		Type   string  `json:"type"`
+		Weight float32 `json:"weight"`
+	}
+	if err := json.Unmarshal([]byte(raw), &result); err != nil {
+		return "", 0, fmt.Errorf("parse classification response %q: %w", raw, err)
+	}
+	if result.Weight < 0.1 || result.Weight > 1.0 {
+		result.Weight = 0.5
+	}
+	return result.Type, result.Weight, nil
+}
+
+// detectCommentKeywords is the keyword-only fallback for comment classification.
+// Used when no LLM backend is configured or when the LLM call fails.
+func detectCommentKeywords(content string) (signalType string, weight float32, ok bool) {
+	return DetectCommentSignal(content)
+}
+
 // DetectCommentSignal inspects comment text for explicit praise or
 // criticism directed at an agent. Returns the signal type, a weight
 // (0.1–1.0), and whether a signal was found at all.
 //
-// Intentionally keyword-based — no LLM call on the hot comment path.
+// Keyword-only — use ClassifyCommentSignal for LLM-backed detection.
 // Weights: 0.6 for praise, 0.7 for criticism (bad feedback lands harder).
 func DetectCommentSignal(content string) (signalType string, weight float32, ok bool) {
 	lower := strings.ToLower(content)

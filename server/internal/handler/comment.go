@@ -1789,12 +1789,14 @@ func (h *Handler) ResolveComment(w http.ResponseWriter, r *http.Request) {
 
 // maybeCapturePersonaSignal detects praise/criticism in a human comment and
 // records an agent_interaction_signal row. Always called in a goroutine.
+// Uses context.Background so the LLM call survives after the HTTP response is sent.
 func (h *Handler) maybeCapturePersonaSignal(
-	ctx context.Context,
+	_ context.Context,
 	agentID, workspaceID, commentID, userID pgtype.UUID,
 	content string,
 ) {
-	signalType, weight, ok := service.DetectCommentSignal(content)
+	ctx := context.Background()
+	signalType, weight, ok := service.ClassifyCommentSignal(ctx, content)
 	if !ok {
 		return
 	}
