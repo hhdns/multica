@@ -5,7 +5,7 @@ INSERT INTO agent_memory (
     emotional_valence, emotional_intensity,
     is_consolidated, source_count
 ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)
-RETURNING *;
+RETURNING id;
 
 -- name: SetAgentMemoryEmbedding :exec
 UPDATE agent_memory

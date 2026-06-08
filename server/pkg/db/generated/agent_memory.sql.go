@@ -44,7 +44,7 @@ INSERT INTO agent_memory (
     emotional_valence, emotional_intensity,
     is_consolidated, source_count
 ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)
-RETURNING id, agent_id, workspace_id, content, category, sentiment, source_issue_id, source_task_id, embedding, importance, created_at, emotional_valence, emotional_intensity, access_count, last_accessed_at, is_consolidated, source_count
+RETURNING id
 `
 
 type CreateAgentMemoryParams struct {
@@ -62,7 +62,7 @@ type CreateAgentMemoryParams struct {
 	SourceCount        int32       `json:"source_count"`
 }
 
-func (q *Queries) CreateAgentMemory(ctx context.Context, arg CreateAgentMemoryParams) (AgentMemory, error) {
+func (q *Queries) CreateAgentMemory(ctx context.Context, arg CreateAgentMemoryParams) (pgtype.UUID, error) {
 	row := q.db.QueryRow(ctx, createAgentMemory,
 		arg.AgentID,
 		arg.WorkspaceID,
@@ -77,27 +77,9 @@ func (q *Queries) CreateAgentMemory(ctx context.Context, arg CreateAgentMemoryPa
 		arg.IsConsolidated,
 		arg.SourceCount,
 	)
-	var i AgentMemory
-	err := row.Scan(
-		&i.ID,
-		&i.AgentID,
-		&i.WorkspaceID,
-		&i.Content,
-		&i.Category,
-		&i.Sentiment,
-		&i.SourceIssueID,
-		&i.SourceTaskID,
-		&i.Embedding,
-		&i.Importance,
-		&i.CreatedAt,
-		&i.EmotionalValence,
-		&i.EmotionalIntensity,
-		&i.AccessCount,
-		&i.LastAccessedAt,
-		&i.IsConsolidated,
-		&i.SourceCount,
-	)
-	return i, err
+	var id pgtype.UUID
+	err := row.Scan(&id)
+	return id, err
 }
 
 const deleteMemoriesByIDs = `-- name: DeleteMemoriesByIDs :exec

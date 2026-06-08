@@ -292,10 +292,10 @@ func RecordTaskMemory(
 	vec := Embed(ctx, content)
 	if vec != nil {
 		if err := q.SetAgentMemoryEmbedding(ctx, db.SetAgentMemoryEmbeddingParams{
-			ID:        mem.ID,
+			ID:        mem,
 			Embedding: pgvector.NewVector(vec),
 		}); err != nil {
-			slog.Warn("agent_memory: set embedding failed", "error", err, "memory_id", mem.ID)
+			slog.Warn("agent_memory: set embedding failed", "error", err, "memory_id", mem)
 		}
 	}
 
@@ -671,7 +671,7 @@ Output only the synthesised text, no preamble.`)
 	// Embed the consolidated memory so it participates in future recall.
 	if vec := Embed(ctx, content); vec != nil {
 		_ = q.SetAgentMemoryEmbedding(ctx, db.SetAgentMemoryEmbeddingParams{
-			ID:        mem.ID,
+			ID:        mem,
 			Embedding: pgvector.NewVector(vec),
 		})
 	}
@@ -686,7 +686,7 @@ Output only the synthesised text, no preamble.`)
 	}
 
 	slog.Info("agent_memory: compacted cluster",
-		"agent_id", agentID, "cluster_size", len(cluster), "memory_id", mem.ID)
+		"agent_id", agentID, "cluster_size", len(cluster), "memory_id", mem)
 }
 
 // emotionalImpressionThreshold is the minimum signal weight that triggers an
@@ -763,7 +763,7 @@ func MaybeRecordEmotionalImpression(
 	// Embed so it can surface in future semantic recall.
 	if vec := Embed(ctx, content); vec != nil {
 		if err := q.SetAgentMemoryEmbedding(ctx, db.SetAgentMemoryEmbeddingParams{
-			ID:        mem.ID,
+			ID:        mem,
 			Embedding: pgvector.NewVector(vec),
 		}); err != nil {
 			slog.Debug("agent_memory: embed emotional impression failed", "error", err)
@@ -871,7 +871,7 @@ reflection. Output only the reflection text, no preamble.`, issueTitle)
 	}
 	if vec := Embed(ctx, strings.TrimSpace(breakthroughRes.text)); vec != nil {
 		_ = q.SetAgentMemoryEmbedding(ctx, db.SetAgentMemoryEmbeddingParams{
-			ID:        mem.ID,
+			ID:        mem,
 			Embedding: pgvector.NewVector(vec),
 		})
 	}
