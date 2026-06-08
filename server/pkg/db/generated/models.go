@@ -62,17 +62,23 @@ type AgentInteractionSignal struct {
 }
 
 type AgentMemory struct {
-	ID            pgtype.UUID        `json:"id"`
-	AgentID       pgtype.UUID        `json:"agent_id"`
-	WorkspaceID   pgtype.UUID        `json:"workspace_id"`
-	Content       string             `json:"content"`
-	Category      string             `json:"category"`
-	Sentiment     string             `json:"sentiment"`
-	SourceIssueID pgtype.UUID        `json:"source_issue_id"`
-	SourceTaskID  pgtype.UUID        `json:"source_task_id"`
-	Embedding     pgvector.Vector    `json:"embedding"`
-	Importance    float32            `json:"importance"`
-	CreatedAt     pgtype.Timestamptz `json:"created_at"`
+	ID                 pgtype.UUID        `json:"id"`
+	AgentID            pgtype.UUID        `json:"agent_id"`
+	WorkspaceID        pgtype.UUID        `json:"workspace_id"`
+	Content            string             `json:"content"`
+	Category           string             `json:"category"`
+	Sentiment          string             `json:"sentiment"`
+	SourceIssueID      pgtype.UUID        `json:"source_issue_id"`
+	SourceTaskID       pgtype.UUID        `json:"source_task_id"`
+	Embedding          pgvector.Vector    `json:"embedding"`
+	Importance         float32            `json:"importance"`
+	CreatedAt          pgtype.Timestamptz `json:"created_at"`
+	EmotionalValence   float32            `json:"emotional_valence"`
+	EmotionalIntensity float32            `json:"emotional_intensity"`
+	AccessCount        int32              `json:"access_count"`
+	LastAccessedAt     pgtype.Timestamptz `json:"last_accessed_at"`
+	IsConsolidated     bool               `json:"is_consolidated"`
+	SourceCount        int32              `json:"source_count"`
 }
 
 type AgentPersona struct {

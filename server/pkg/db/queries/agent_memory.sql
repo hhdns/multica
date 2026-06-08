@@ -83,23 +83,45 @@ ORDER BY created_at DESC
 LIMIT $3;
 
 -- name: DeleteOldAgentMemories :exec
--- Prune memories beyond the retention limit using a multi-factor retention
--- score rather than pure age. Keeps the memories most worth remembering:
---   35% importance   — explicitly weighted at record time
---   25% recency      — exponential decay with ~45-day half-life
---   20% access freq  — memories that surface in searches matter more
---   15% emotional    — vivid experiences are harder to forget
---    5% consolidated — compacted lessons get a small bonus
-DELETE FROM agent_memory
-WHERE agent_memory.id IN (
-    SELECT m.id FROM agent_memory m
-    WHERE m.agent_id = $1
-    ORDER BY (
-          0.35 * m.importance
-        + 0.25 * exp(-EXTRACT(EPOCH FROM (NOW() - m.created_at)) / (45.0 * 86400))
-        + 0.20 * ln(1.0 + m.access_count::float8)
-        + 0.15 * m.emotional_intensity
-        + 0.05 * CASE WHEN m.is_consolidated THEN 1.0 ELSE 0.0 END
-    ) DESC
-    OFFSET $2
+-- Tiered retention pruning: each category group has its own cap so high-value
+-- emotional and skill memories cannot be crowded out by routine task episodes.
+--
+-- Tier limits (kept in sync with constants in service/agent_memory.go):
+--   emotional_impression : 20
+--   skill_learned        : 30
+--   everything else      : 150   (task_outcome, user_feedback, self_note)
+--
+-- Within each tier, the multi-factor retention score ranks memories:
+--   35% importance · 25% recency (45-day half-life) · 20% access frequency
+--   15% emotional intensity · 5% consolidated bonus
+DELETE FROM agent_memory AS target
+WHERE target.agent_id = $1
+  AND target.id IN (
+    SELECT r.id
+    FROM (
+        SELECT am.id,
+               ROW_NUMBER() OVER (
+                   PARTITION BY
+                       CASE am.category
+                           WHEN 'emotional_impression' THEN 'emotional'
+                           WHEN 'skill_learned'        THEN 'skill'
+                           ELSE                             'episodic'
+                       END
+                   ORDER BY (
+                         0.35 * am.importance
+                       + 0.25 * exp(-EXTRACT(EPOCH FROM (NOW() - am.created_at)) / (45.0 * 86400))
+                       + 0.20 * ln(1.0 + am.access_count::float8)
+                       + 0.15 * am.emotional_intensity
+                       + 0.05 * CASE WHEN am.is_consolidated THEN 1.0 ELSE 0.0 END
+                   ) DESC
+               ) AS rn,
+               CASE am.category
+                   WHEN 'emotional_impression' THEN 20
+                   WHEN 'skill_learned'        THEN 30
+                   ELSE                             150
+               END AS cat_limit
+        FROM agent_memory am
+        WHERE am.agent_id = $1
+    ) r
+    WHERE r.rn > r.cat_limit
 );

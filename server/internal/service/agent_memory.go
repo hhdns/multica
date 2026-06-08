@@ -19,9 +19,13 @@ import (
 )
 
 const (
-	// Maximum number of memories retained per agent. Pruning uses a
-	// multi-factor retention score, not pure age — see DeleteOldAgentMemories.
-	memoryRetentionLimit = 200
+	// Tiered retention caps per category group. The SQL query
+	// (DeleteOldAgentMemories) encodes the same values — keep them in sync.
+	memoryLimitEpisodic  = 150 // task_outcome, user_feedback, self_note
+	memoryLimitSkill     = 30  // skill_learned (consolidated)
+	memoryLimitEmotional = 20  // emotional_impression
+	// Total hard cap used for the compaction trigger threshold.
+	memoryRetentionLimit = memoryLimitEpisodic + memoryLimitSkill + memoryLimitEmotional // 200
 	// Number of memories retrieved for a task context injection.
 	memorySearchTopK = 5
 	// Minimum cosine similarity threshold to include a memory in the brief.
@@ -190,11 +194,9 @@ func RecordTaskMemory(
 	// operates on a richer, more diverse pool.
 	MaybeCompactMemories(ctx, q, agentID, workspaceID)
 
-	// Prune old memories to stay within the retention cap.
-	if err := q.DeleteOldAgentMemories(ctx, db.DeleteOldAgentMemoriesParams{
-		AgentID: agentID,
-		Offset:  memoryRetentionLimit,
-	}); err != nil {
+	// Prune memories exceeding the per-category tiered caps.
+	// Limits are encoded in the SQL query; no parameter needed here.
+	if err := q.DeleteOldAgentMemories(ctx, agentID); err != nil {
 		slog.Warn("agent_memory: prune failed", "error", err, "agent_id", agentID)
 	}
 }
