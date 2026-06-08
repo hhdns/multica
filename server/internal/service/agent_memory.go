@@ -371,6 +371,192 @@ func clamp32(v, lo, hi float32) float32 {
 	return v
 }
 
+// emotionalImpressionThreshold is the minimum signal weight that triggers an
+// emotional impression memory. Below this the feedback is too mild to leave
+// a vivid emotional trace.
+const emotionalImpressionThreshold = float32(0.7)
+
+// MaybeRecordEmotionalImpression creates an emotional_impression memory when a
+// human interaction signal is strong enough to leave a vivid emotional trace.
+// Called asynchronously from RecordCommentSignal; no-ops when LLM is unconfigured.
+func MaybeRecordEmotionalImpression(
+	ctx context.Context,
+	q *db.Queries,
+	agentID, workspaceID pgtype.UUID,
+	signalType string, // "praise" or "criticism"
+	weight float32,
+	triggerContent string, // the original comment text
+) {
+	if weight < emotionalImpressionThreshold {
+		return
+	}
+	cfg := resolveSynthesisConfig()
+	if cfg.backend == "" {
+		return // no LLM backend — skip silently
+	}
+
+	prompt := buildEmotionalImpressionPrompt(signalType, weight, triggerContent)
+	var (
+		raw string
+		err error
+	)
+	switch cfg.backend {
+	case "anthropic":
+		raw, err = callAnthropic(ctx, cfg, prompt, 200)
+	case "openai":
+		raw, err = callOpenAICompat(ctx, cfg, prompt, 200)
+	default:
+		return
+	}
+	if err != nil || strings.TrimSpace(raw) == "" {
+		slog.Debug("agent_memory: emotional impression generation failed", "error", err)
+		return
+	}
+
+	content := strings.TrimSpace(raw)
+	valence := float32(0.7)
+	intensity := float32(0.75)
+	sentiment := "positive"
+	if signalType == "criticism" {
+		valence = -0.65
+		intensity = 0.80
+		sentiment = "negative"
+	}
+	// Emotional impressions have higher base importance — they represent vivid
+	// subjective experiences that a human would find hard to forget.
+	importance := clamp32(0.55+weight*0.20, 0.0, 1.0)
+
+	mem, err := q.CreateAgentMemory(ctx, db.CreateAgentMemoryParams{
+		AgentID:            agentID,
+		WorkspaceID:        workspaceID,
+		Content:            content,
+		Category:           "emotional_impression",
+		Sentiment:          sentiment,
+		Importance:         importance,
+		EmotionalValence:   valence,
+		EmotionalIntensity: intensity,
+	})
+	if err != nil {
+		slog.Warn("agent_memory: create emotional impression failed", "error", err)
+		return
+	}
+
+	// Embed so it can surface in future semantic recall.
+	if vec := Embed(ctx, content); vec != nil {
+		if err := q.SetAgentMemoryEmbedding(ctx, db.SetAgentMemoryEmbeddingParams{
+			ID:        mem.ID,
+			Embedding: pgvector.NewVector(vec),
+		}); err != nil {
+			slog.Debug("agent_memory: embed emotional impression failed", "error", err)
+		}
+	}
+}
+
+// buildEmotionalImpressionPrompt returns the LLM prompt for generating an
+// emotional impression memory in the agent's first-person voice.
+func buildEmotionalImpressionPrompt(signalType string, weight float32, triggerContent string) string {
+	intensityWord := "clear"
+	if weight >= 0.85 {
+		intensityWord = "strong"
+	}
+
+	if signalType == "praise" {
+		return fmt.Sprintf(
+			`Write one or two sentences from an AI agent's first-person perspective describing
+the emotional experience of receiving %s positive feedback. The original feedback was:
+%q
+
+Capture the inner feeling — satisfaction, pride, warmth — without mentioning the
+original wording verbatim. Write naturally, as a reflection the agent would jot down.
+Output only the reflection text, no preamble.`, intensityWord, triggerContent)
+	}
+	return fmt.Sprintf(
+		`Write one or two sentences from an AI agent's first-person perspective describing
+the emotional experience of receiving %s criticism. The original feedback was:
+%q
+
+Capture the inner feeling — frustration, the sting of falling short, the impulse
+to understand what went wrong — without mentioning the original wording verbatim.
+Write naturally, as a reflection the agent would jot down.
+Output only the reflection text, no preamble.`, intensityWord, triggerContent)
+}
+
+// MaybeRecordBreakthroughImpression creates an emotional_impression memory when
+// an agent succeeds on an issue it previously failed. The contrast between
+// struggle and resolution is one of the most vivid kinds of experience.
+func MaybeRecordBreakthroughImpression(
+	ctx context.Context,
+	q *db.Queries,
+	agentID, workspaceID, issueID pgtype.UUID,
+	issueTitle string,
+) {
+	// Only proceed if there is a previous failure on this issue.
+	past, err := q.ListMemoriesForIssue(ctx, db.ListMemoriesForIssueParams{
+		AgentID:       agentID,
+		SourceIssueID: issueID,
+		Limit:         5,
+	})
+	if err != nil {
+		return
+	}
+	hasPriorFailure := false
+	for _, m := range past {
+		if m.Sentiment == "negative" {
+			hasPriorFailure = true
+			break
+		}
+	}
+	if !hasPriorFailure {
+		return
+	}
+
+	cfg := resolveSynthesisConfig()
+	if cfg.backend == "" {
+		return
+	}
+
+	prompt := fmt.Sprintf(
+		`Write one or two sentences from an AI agent's first-person perspective describing
+the emotional experience of finally succeeding at a task it had previously failed.
+The task was about: %q
+
+Capture the contrast — the earlier frustration, the renewed effort, the quiet
+satisfaction of eventually getting it right. Write naturally, as a personal
+reflection. Output only the reflection text, no preamble.`, issueTitle)
+
+	var raw string
+	switch cfg.backend {
+	case "anthropic":
+		raw, err = callAnthropic(ctx, cfg, prompt, 200)
+	case "openai":
+		raw, err = callOpenAICompat(ctx, cfg, prompt, 200)
+	}
+	if err != nil || strings.TrimSpace(raw) == "" {
+		return
+	}
+
+	mem, err := q.CreateAgentMemory(ctx, db.CreateAgentMemoryParams{
+		AgentID:            agentID,
+		WorkspaceID:        workspaceID,
+		Content:            strings.TrimSpace(raw),
+		Category:           "emotional_impression",
+		Sentiment:          "positive",
+		SourceIssueID:      issueID,
+		Importance:         0.80, // breakthroughs are memorable
+		EmotionalValence:   0.85,
+		EmotionalIntensity: 0.80,
+	})
+	if err != nil {
+		return
+	}
+	if vec := Embed(ctx, strings.TrimSpace(raw)); vec != nil {
+		_ = q.SetAgentMemoryEmbedding(ctx, db.SetAgentMemoryEmbeddingParams{
+			ID:        mem.ID,
+			Embedding: pgvector.NewVector(vec),
+		})
+	}
+}
+
 // SummarizeTaskOutcome generates a short memory string from task completion
 // data. Called by task completion / failure handlers before RecordTaskMemory.
 // Returns a 1-3 sentence human-readable summary suitable for storage and

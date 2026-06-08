@@ -167,6 +167,11 @@ func RecordCommentSignal(
 		return
 	}
 
+	// Strong praise or criticism leaves an emotional trace in episodic memory.
+	if signalType == SignalTypePraise || signalType == SignalTypeCriticism {
+		MaybeRecordEmotionalImpression(ctx, q, agentID, workspaceID, signalType, weight, content)
+	}
+
 	if _, err := q.UpsertAgentPersona(ctx, db.UpsertAgentPersonaParams{
 		AgentID:     agentID,
 		WorkspaceID: workspaceID,

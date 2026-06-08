@@ -2224,6 +2224,12 @@ func (h *Handler) recordTaskOutcomeMemory(
 	wsUUID := parseUUID(workspaceID)
 	service.RecordTaskMemory(ctx, h.Queries, task.AgentID, wsUUID, task.IssueID, task.ID,
 		content, sentiment, importance, valence, intensity)
+
+	// Breakthrough: success after a prior failure on the same issue leaves an
+	// especially vivid emotional impression worth preserving separately.
+	if outcomeType == "completed" {
+		service.MaybeRecordBreakthroughImpression(ctx, h.Queries, task.AgentID, wsUUID, task.IssueID, issueTitle)
+	}
 }
 
 // ---------------------------------------------------------------------------
