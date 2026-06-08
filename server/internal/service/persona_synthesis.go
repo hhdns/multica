@@ -36,6 +36,13 @@ type synthesisConfig struct {
 	model    string
 }
 
+// ResolveSynthesisBackend returns the active LLM backend name for persona
+// synthesis: "anthropic", "openai" (OpenAI-compat), or "" (disabled).
+// Safe to expose to the frontend — never includes the actual API key.
+func ResolveSynthesisBackend() string {
+	return resolveSynthesisConfig().backend
+}
+
 // resolveSynthesisConfig reads environment variables and returns the active
 // synthesis configuration.
 //

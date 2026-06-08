@@ -62,6 +62,8 @@ export function AuthInitializer({
           // Old servers omit this field — treat that as "creation allowed"
           // (the managed-cloud default) rather than blocking the UI.
           workspaceCreationDisabled: cfg.workspace_creation_disabled === true,
+          // Old servers omit this field — treat absence as "" (disabled).
+          personaSynthesisBackend: cfg.persona_synthesis_backend ?? "",
         });
         configStore.getState().setDaemonConfig({
           daemonServerUrl: cfg.daemon_server_url,

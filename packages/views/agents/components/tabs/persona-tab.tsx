@@ -5,6 +5,7 @@ import { Loader2, Save, Sparkles, ThumbsUp, ThumbsDown, Plus, X, Wand2, Brain, C
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import type { Agent, AgentPersona, AgentMemory, UpdateAgentPersonaRequest } from "@multica/core/types";
 import { api } from "@multica/core/api";
+import { useConfigStore } from "@multica/core/config";
 import { useWSEvent } from "@multica/core/realtime";
 import { Button } from "@multica/ui/components/ui/button";
 import { Textarea } from "@multica/ui/components/ui/textarea";
@@ -90,6 +91,8 @@ export function PersonaTab({ agent, canEdit }: PersonaTabProps) {
     },
   });
 
+  const personaSynthesisBackend = useConfigStore((s) => s.personaSynthesisBackend);
+
   const [synthesisError, setSynthesisError] = useState<string | null>(null);
   const synthesize = useMutation({
     mutationFn: () => api.synthesizeAgentPersona(agent.id),
@@ -123,6 +126,7 @@ export function PersonaTab({ agent, canEdit }: PersonaTabProps) {
         onSynthesize={() => synthesize.mutate()}
         synthesizing={synthesize.isPending}
         error={synthesisError}
+        backendConfigured={personaSynthesisBackend !== ""}
       />
       {persona.recent_signals.length > 0 && <SignalsSection persona={persona} />}
       <MemoriesSection agentId={agent.id} />
@@ -416,12 +420,14 @@ function SynthesizeSection({
   onSynthesize,
   synthesizing,
   error,
+  backendConfigured,
 }: {
   persona: AgentPersona;
   canEdit: boolean;
   onSynthesize: () => void;
   synthesizing: boolean;
   error: string | null;
+  backendConfigured: boolean;
 }) {
   const lastSynth = persona.last_synthesized_at
     ? new Date(persona.last_synthesized_at).toLocaleString()
@@ -430,6 +436,13 @@ function SynthesizeSection({
   return (
     <div className="flex flex-col gap-2">
       <SectionTitle>Instructions Synthesis</SectionTitle>
+      {!backendConfigured && (
+        <p className="rounded-md border border-amber-200 bg-amber-50 px-3 py-2 text-[11px] text-amber-800 dark:border-amber-800/40 dark:bg-amber-950/30 dark:text-amber-400">
+          No LLM backend configured — synthesis and comment classification will use keyword matching only.
+          Set <code className="font-mono">ANTHROPIC_API_KEY</code> or{" "}
+          <code className="font-mono">PERSONA_SYNTHESIS_BASE_URL</code> on the server to enable full LLM support.
+        </p>
+      )}
       <div className="flex items-center gap-3 rounded-lg border bg-muted/30 px-4 py-3">
         <div className="min-w-0 flex-1">
           <p className="text-xs text-foreground">
@@ -446,7 +459,7 @@ function SynthesizeSection({
             size="sm"
             variant="outline"
             onClick={onSynthesize}
-            disabled={synthesizing}
+            disabled={synthesizing || !backendConfigured}
             className="shrink-0"
           >
             {synthesizing ? (
@@ -459,11 +472,7 @@ function SynthesizeSection({
         )}
       </div>
       {error && (
-        <p className="text-[11px] text-destructive">
-          {error.includes("disabled") || error.includes("ANTHROPIC_API_KEY") || error.includes("PERSONA_SYNTHESIS")
-            ? "Synthesis is not configured. Set ANTHROPIC_API_KEY (Anthropic) or PERSONA_SYNTHESIS_BASE_URL (local LLM) on the server."
-            : error}
-        </p>
+        <p className="text-[11px] text-destructive">{error}</p>
       )}
     </div>
   );

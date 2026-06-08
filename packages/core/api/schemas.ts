@@ -39,6 +39,9 @@ export interface AppConfigResponse {
   daemon_server_url?: string;
   daemon_app_url?: string;
   workspace_creation_disabled?: boolean;
+  // "anthropic" | "openai" | "" — which LLM backend is configured server-side.
+  // Absent (treated as "") when the server is older and doesn't send the field.
+  persona_synthesis_backend?: string;
 }
 
 // ---------------------------------------------------------------------------
@@ -179,6 +182,7 @@ export const AppConfigSchema = z.object({
   daemon_server_url: OptionalStringSchema,
   daemon_app_url: OptionalStringSchema,
   workspace_creation_disabled: BooleanWithDefaultSchema(false).optional(),
+  persona_synthesis_backend: OptionalStringSchema,
 }).loose();
 
 export const EMPTY_APP_CONFIG: AppConfigResponse = {
