@@ -60,6 +60,14 @@ UPDATE agent_interaction_signal
 SET processed = true
 WHERE agent_id = $1 AND NOT processed;
 
+-- name: RefineAgentSignalClassification :exec
+-- Upgrades the type and weight of a signal after LLM classification.
+-- The NOT processed guard prevents updating signals the drift pass has
+-- already consumed — there's no point refining a signal that's been acted on.
+UPDATE agent_interaction_signal
+SET type = $2, weight = $3
+WHERE id = $1 AND NOT processed;
+
 -- name: SetAgentPersonaSynthesizedAt :exec
 UPDATE agent_persona SET
     last_synthesized_at = now(),

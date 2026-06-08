@@ -1787,20 +1787,45 @@ func (h *Handler) ResolveComment(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, resp)
 }
 
-// maybeCapturePersonaSignal detects praise/criticism in a human comment and
-// records an agent_interaction_signal row. Always called in a goroutine.
-// Uses context.Background so the LLM call survives after the HTTP response is sent.
+// maybeCapturePersonaSignal detects praise/criticism in a human comment using
+// a two-phase approach to avoid drift-batch timing races when comments arrive
+// in rapid succession:
+//
+//  1. Keyword classification runs synchronously → signal enters DB immediately
+//     so IncrementSignalCount and MaybeApplyTraitDrift see the right count.
+//  2. LLM classification runs asynchronously → if it disagrees with the
+//     keyword result, RefineAgentSignalClassification patches the signal while
+//     it is still unprocessed, improving the next drift pass's accuracy.
+//
+// If keywords find nothing, LLM is still attempted async; the signal enters DB
+// only if the LLM finds a non-neutral classification.
 func (h *Handler) maybeCapturePersonaSignal(
 	_ context.Context,
 	agentID, workspaceID, commentID, userID pgtype.UUID,
 	content string,
 ) {
 	ctx := context.Background()
-	signalType, weight, ok := service.ClassifyCommentSignal(ctx, content)
-	if !ok {
+	kwType, kwWeight, kwOk := service.DetectCommentSignal(content)
+
+	if kwOk {
+		// Phase 1: record immediately with keyword result.
+		sigID := service.RecordCommentSignal(ctx, h.Queries, agentID, workspaceID,
+			kwType, kwWeight, content, commentID, userID)
+		// Phase 2: async LLM upgrade (refines type/weight if result differs).
+		if sigID.Valid {
+			go service.MaybeLLMUpgradeSignal(ctx, h.Queries, sigID, kwType, kwWeight, content)
+		}
 		return
 	}
-	service.RecordCommentSignal(ctx, h.Queries, agentID, workspaceID, signalType, weight, content, commentID, userID)
+
+	// Keywords found nothing — try LLM async; record only if it finds a signal.
+	go func() {
+		llmType, llmWeight, llmOk := service.ClassifyCommentSignal(ctx, content)
+		if llmOk {
+			service.RecordCommentSignal(ctx, h.Queries, agentID, workspaceID,
+				llmType, llmWeight, content, commentID, userID)
+		}
+	}()
 }
 
 func (h *Handler) UnresolveComment(w http.ResponseWriter, r *http.Request) {

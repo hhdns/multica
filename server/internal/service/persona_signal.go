@@ -141,6 +141,7 @@ func DetectCommentSignal(content string) (signalType string, weight float32, ok 
 // RecordCommentSignal creates an agent_interaction_signal row, bumps the
 // persona signal count, and — if enough signals have accumulated — runs a
 // trait-drift pass. Always called in a goroutine; errors are logged only.
+// Returns the newly-created signal's ID so callers can schedule an LLM upgrade.
 func RecordCommentSignal(
 	ctx context.Context,
 	q *db.Queries,
@@ -150,8 +151,8 @@ func RecordCommentSignal(
 	content string,
 	commentID pgtype.UUID,
 	userID pgtype.UUID,
-) {
-	_, err := q.CreateAgentInteractionSignal(ctx, db.CreateAgentInteractionSignalParams{
+) pgtype.UUID {
+	sig, err := q.CreateAgentInteractionSignal(ctx, db.CreateAgentInteractionSignalParams{
 		AgentID:      agentID,
 		WorkspaceID:  workspaceID,
 		Type:         signalType,
@@ -164,7 +165,7 @@ func RecordCommentSignal(
 	if err != nil {
 		slog.Warn("persona: failed to record comment signal", "error", err,
 			"agent_id", agentID, "type", signalType)
-		return
+		return pgtype.UUID{}
 	}
 
 	// Strong praise or criticism leaves an emotional trace in episodic memory.
@@ -177,13 +178,58 @@ func RecordCommentSignal(
 		WorkspaceID: workspaceID,
 	}); err != nil {
 		slog.Warn("persona: failed to upsert persona on signal", "error", err, "agent_id", agentID)
-		return
+		return pgtype.UUID{}
 	}
 	if err := q.IncrementAgentPersonaSignalCount(ctx, agentID); err != nil {
 		slog.Warn("persona: failed to increment signal count", "error", err, "agent_id", agentID)
 	}
 
 	MaybeApplyTraitDrift(ctx, q, agentID)
+	return sig.ID
+}
+
+// MaybeLLMUpgradeSignal asynchronously refines an already-recorded signal's
+// type and weight using LLM classification. Only updates if the LLM result
+// differs from the keyword result (kwType/kwWeight) by a meaningful margin,
+// and only while the signal is still unprocessed by the drift pass.
+func MaybeLLMUpgradeSignal(
+	ctx context.Context,
+	q *db.Queries,
+	signalID pgtype.UUID,
+	kwType string,
+	kwWeight float32,
+	content string,
+) {
+	cfg := resolveSynthesisConfig()
+	if cfg.backend == "" {
+		return
+	}
+
+	llmType, llmWeight, err := classifyCommentWithLLM(ctx, cfg, content)
+	if err != nil {
+		slog.Debug("persona: LLM signal upgrade failed", "error", err)
+		return
+	}
+	if llmType == "neutral" || llmType == "" {
+		return
+	}
+
+	// Skip the write if the LLM agrees with keyword classification.
+	weightDelta := llmWeight - kwWeight
+	if weightDelta < 0 {
+		weightDelta = -weightDelta
+	}
+	if llmType == kwType && weightDelta < 0.10 {
+		return
+	}
+
+	if err := q.RefineAgentSignalClassification(ctx, db.RefineAgentSignalClassificationParams{
+		ID:     signalID,
+		Type:   llmType,
+		Weight: llmWeight,
+	}); err != nil {
+		slog.Debug("persona: refine signal classification failed", "error", err)
+	}
 }
 
 // MaybeApplyTraitDrift runs a trait-drift pass if enough unprocessed signals

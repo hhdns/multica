@@ -271,6 +271,26 @@ func (q *Queries) MarkAgentSignalsProcessed(ctx context.Context, agentID pgtype.
 	return err
 }
 
+const refineAgentSignalClassification = `-- name: RefineAgentSignalClassification :exec
+UPDATE agent_interaction_signal
+SET type = $2, weight = $3
+WHERE id = $1 AND NOT processed
+`
+
+type RefineAgentSignalClassificationParams struct {
+	ID     pgtype.UUID `json:"id"`
+	Type   string      `json:"type"`
+	Weight float32     `json:"weight"`
+}
+
+// Upgrades the type and weight of a signal after LLM classification.
+// The NOT processed guard prevents updating signals the drift pass has
+// already consumed — there's no point refining a signal that's been acted on.
+func (q *Queries) RefineAgentSignalClassification(ctx context.Context, arg RefineAgentSignalClassificationParams) error {
+	_, err := q.db.Exec(ctx, refineAgentSignalClassification, arg.ID, arg.Type, arg.Weight)
+	return err
+}
+
 const setAgentPersonaSynthesizedAt = `-- name: SetAgentPersonaSynthesizedAt :exec
 UPDATE agent_persona SET
     last_synthesized_at = now(),
