@@ -285,7 +285,7 @@ func (h *Handler) SynthesizeAgentPersona(w http.ResponseWriter, r *http.Request)
 
 	ctx := r.Context()
 	if err := service.SynthesizeAgentInstructions(
-		ctx, h.Queries, agent.ID,
+		ctx, h.Queries, agent.ID, agent.WorkspaceID,
 		agent.Name,
 		agent.Instructions,
 	); err != nil {

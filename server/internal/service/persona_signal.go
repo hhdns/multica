@@ -34,7 +34,7 @@ const classifyMaxTok = 80
 func ClassifyCommentSignal(ctx context.Context, content string) (signalType string, weight float32, ok bool) {
 	cfg := resolveSynthesisConfig()
 	if cfg.backend != "" {
-		st, w, err := classifyCommentWithLLM(ctx, cfg, content)
+		st, w, _, err := classifyCommentWithLLM(ctx, cfg, content)
 		if err != nil {
 			slog.Warn("persona: LLM comment classification failed, using keywords", "error", err)
 		} else {
@@ -48,26 +48,26 @@ func ClassifyCommentSignal(ctx context.Context, content string) (signalType stri
 }
 
 // classifyCommentWithLLM asks the configured LLM backend to classify a comment.
-// Returns signalType ("praise"/"criticism"/"neutral") and weight (0.1–1.0).
-func classifyCommentWithLLM(ctx context.Context, cfg synthesisConfig, content string) (signalType string, weight float32, err error) {
+// Returns signalType ("praise"/"criticism"/"neutral"), weight (0.1–1.0), and the raw llmCallResult for logging.
+func classifyCommentWithLLM(ctx context.Context, cfg synthesisConfig, content string) (signalType string, weight float32, res llmCallResult, err error) {
 	prompt := fmt.Sprintf(
 		`Classify this comment about an AI agent's work. Output ONLY JSON with no explanation: {"type":"praise"|"criticism"|"neutral","weight":0.1-1.0}
 Weight: 1.0=very strong, 0.5=moderate, 0.1=subtle.
 
 Comment: %q`, content)
 
-	var raw string
 	switch cfg.backend {
 	case "anthropic":
-		raw, err = callAnthropic(ctx, cfg, prompt, classifyMaxTok)
+		res, err = callAnthropic(ctx, cfg, prompt, classifyMaxTok)
 	case "openai":
-		raw, err = callOpenAICompat(ctx, cfg, prompt, classifyMaxTok)
+		res, err = callOpenAICompat(ctx, cfg, prompt, classifyMaxTok)
 	default:
-		return "", 0, fmt.Errorf("unknown backend: %s", cfg.backend)
+		return "", 0, llmCallResult{}, fmt.Errorf("unknown backend: %s", cfg.backend)
 	}
 	if err != nil {
-		return "", 0, err
+		return "", 0, llmCallResult{}, err
 	}
+	raw := res.text
 
 	// Strip markdown fences or leading text if the model wraps its output.
 	raw = strings.TrimSpace(raw)
@@ -83,12 +83,12 @@ Comment: %q`, content)
 		Weight float32 `json:"weight"`
 	}
 	if err := json.Unmarshal([]byte(raw), &result); err != nil {
-		return "", 0, fmt.Errorf("parse classification response %q: %w", raw, err)
+		return "", 0, res, fmt.Errorf("parse classification response %q: %w", raw, err)
 	}
 	if result.Weight < 0.1 || result.Weight > 1.0 {
 		result.Weight = 0.5
 	}
-	return result.Type, result.Weight, nil
+	return result.Type, result.Weight, res, nil
 }
 
 // detectCommentKeywords is the keyword-only fallback for comment classification.
@@ -205,11 +205,12 @@ func MaybeLLMUpgradeSignal(
 		return
 	}
 
-	llmType, llmWeight, err := classifyCommentWithLLM(ctx, cfg, content)
+	llmType, llmWeight, llmRes, err := classifyCommentWithLLM(ctx, cfg, content)
 	if err != nil {
 		slog.Debug("persona: LLM signal upgrade failed", "error", err)
 		return
 	}
+	logPersonaLLMCall(ctx, q, "classification", pgtype.UUID{}, pgtype.UUID{}, cfg.backend, cfg.model, llmRes)
 	if llmType == "neutral" || llmType == "" {
 		return
 	}

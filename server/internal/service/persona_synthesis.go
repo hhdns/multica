@@ -88,13 +88,45 @@ func resolveSynthesisConfig() synthesisConfig {
 	return synthesisConfig{} // disabled
 }
 
+// llmCallResult holds the output of a single LLM API call.
+type llmCallResult struct {
+	text         string
+	inputTokens  int32
+	outputTokens int32
+	latencyMs    int32
+}
+
+// logPersonaLLMCall records a completed LLM call to the append-only audit table.
+// Errors are logged at debug level and never propagate — this is best-effort.
+func logPersonaLLMCall(
+	ctx context.Context,
+	q *db.Queries,
+	callType string,
+	agentID, workspaceID pgtype.UUID,
+	backend, model string,
+	res llmCallResult,
+) {
+	if err := q.InsertPersonaLLMCall(ctx, db.InsertPersonaLLMCallParams{
+		AgentID:      agentID,
+		WorkspaceID:  workspaceID,
+		CallType:     callType,
+		Backend:      backend,
+		Model:        model,
+		InputTokens:  res.inputTokens,
+		OutputTokens: res.outputTokens,
+		LatencyMs:    res.latencyMs,
+	}); err != nil {
+		slog.Debug("persona: log llm call failed", "error", err, "call_type", callType)
+	}
+}
+
 // SynthesizeAgentInstructions calls the configured LLM backend to generate
 // new instructions for the agent based on its current persona data, then
 // persists the result to agent.instructions and marks last_synthesized_at.
 func SynthesizeAgentInstructions(
 	ctx context.Context,
 	q *db.Queries,
-	agentID pgtype.UUID,
+	agentID, workspaceID pgtype.UUID,
 	agentName string,
 	currentInstructions string,
 ) error {
@@ -110,18 +142,20 @@ func SynthesizeAgentInstructions(
 
 	prompt := buildSynthesisPrompt(agentName, currentInstructions, persona)
 
-	var instructions string
+	var res llmCallResult
 	switch cfg.backend {
 	case "anthropic":
-		instructions, err = callAnthropic(ctx, cfg, prompt, synthesisMaxTok)
+		res, err = callAnthropic(ctx, cfg, prompt, synthesisMaxTok)
 	case "openai":
-		instructions, err = callOpenAICompat(ctx, cfg, prompt, synthesisMaxTok)
+		res, err = callOpenAICompat(ctx, cfg, prompt, synthesisMaxTok)
 	default:
 		return fmt.Errorf("unknown synthesis backend: %s", cfg.backend)
 	}
 	if err != nil {
 		return fmt.Errorf("synthesis call (%s): %w", cfg.backend, err)
 	}
+	logPersonaLLMCall(ctx, q, "synthesis", agentID, workspaceID, cfg.backend, cfg.model, res)
+	instructions := res.text
 
 	instructions = strings.TrimSpace(instructions)
 	if instructions == "" {
@@ -171,7 +205,7 @@ func MaybeSynthesizeAfterDrift(
 	}
 
 	if err := SynthesizeAgentInstructions(
-		ctx, q, agentID,
+		ctx, q, agentID, agent.WorkspaceID,
 		agent.Name,
 		agent.Instructions,
 	); err != nil {
@@ -261,13 +295,17 @@ type anthropicResponse struct {
 		Type string `json:"type"`
 		Text string `json:"text"`
 	} `json:"content"`
+	Usage struct {
+		InputTokens  int32 `json:"input_tokens"`
+		OutputTokens int32 `json:"output_tokens"`
+	} `json:"usage"`
 	Error *struct {
 		Type    string `json:"type"`
 		Message string `json:"message"`
 	} `json:"error"`
 }
 
-func callAnthropic(ctx context.Context, cfg synthesisConfig, userPrompt string, maxTok int) (string, error) {
+func callAnthropic(ctx context.Context, cfg synthesisConfig, userPrompt string, maxTok int) (llmCallResult, error) {
 	body, err := json.Marshal(anthropicRequest{
 		Model:     cfg.model,
 		MaxTokens: maxTok,
@@ -275,41 +313,48 @@ func callAnthropic(ctx context.Context, cfg synthesisConfig, userPrompt string, 
 		Messages:  []anthropicMessage{{Role: "user", Content: userPrompt}},
 	})
 	if err != nil {
-		return "", err
+		return llmCallResult{}, err
 	}
 
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, cfg.endpoint, bytes.NewReader(body))
 	if err != nil {
-		return "", err
+		return llmCallResult{}, err
 	}
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("x-api-key", cfg.apiKey)
 	req.Header.Set("anthropic-version", "2023-06-01")
 
+	start := time.Now()
 	resp, err := (&http.Client{Timeout: 30 * time.Second}).Do(req)
+	latencyMs := int32(time.Since(start).Milliseconds())
 	if err != nil {
-		return "", err
+		return llmCallResult{}, err
 	}
 	defer resp.Body.Close()
 
 	raw, err := io.ReadAll(resp.Body)
 	if err != nil {
-		return "", err
+		return llmCallResult{}, err
 	}
 
 	var ar anthropicResponse
 	if err := json.Unmarshal(raw, &ar); err != nil {
-		return "", fmt.Errorf("unmarshal response: %w (status %d)", err, resp.StatusCode)
+		return llmCallResult{}, fmt.Errorf("unmarshal response: %w (status %d)", err, resp.StatusCode)
 	}
 	if ar.Error != nil {
-		return "", fmt.Errorf("api error %s: %s", ar.Error.Type, ar.Error.Message)
+		return llmCallResult{}, fmt.Errorf("api error %s: %s", ar.Error.Type, ar.Error.Message)
 	}
 	for _, block := range ar.Content {
 		if block.Type == "text" && block.Text != "" {
-			return block.Text, nil
+			return llmCallResult{
+				text:         block.Text,
+				inputTokens:  ar.Usage.InputTokens,
+				outputTokens: ar.Usage.OutputTokens,
+				latencyMs:    latencyMs,
+			}, nil
 		}
 	}
-	return "", fmt.Errorf("no text block in response (status %d)", resp.StatusCode)
+	return llmCallResult{}, fmt.Errorf("no text block in response (status %d)", resp.StatusCode)
 }
 
 // ---- OpenAI-compat backend ----
@@ -331,12 +376,16 @@ type openAIResponse struct {
 			Content string `json:"content"`
 		} `json:"message"`
 	} `json:"choices"`
+	Usage struct {
+		PromptTokens     int32 `json:"prompt_tokens"`
+		CompletionTokens int32 `json:"completion_tokens"`
+	} `json:"usage"`
 	Error *struct {
 		Message string `json:"message"`
 	} `json:"error"`
 }
 
-func callOpenAICompat(ctx context.Context, cfg synthesisConfig, userPrompt string, maxTok int) (string, error) {
+func callOpenAICompat(ctx context.Context, cfg synthesisConfig, userPrompt string, maxTok int) (llmCallResult, error) {
 	body, err := json.Marshal(openAIRequest{
 		Model:     cfg.model,
 		MaxTokens: maxTok,
@@ -346,38 +395,45 @@ func callOpenAICompat(ctx context.Context, cfg synthesisConfig, userPrompt strin
 		},
 	})
 	if err != nil {
-		return "", err
+		return llmCallResult{}, err
 	}
 
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, cfg.endpoint, bytes.NewReader(body))
 	if err != nil {
-		return "", err
+		return llmCallResult{}, err
 	}
 	req.Header.Set("Content-Type", "application/json")
 	if cfg.apiKey != "" {
 		req.Header.Set("Authorization", "Bearer "+cfg.apiKey)
 	}
 
+	start := time.Now()
 	resp, err := (&http.Client{Timeout: 30 * time.Second}).Do(req)
+	latencyMs := int32(time.Since(start).Milliseconds())
 	if err != nil {
-		return "", err
+		return llmCallResult{}, err
 	}
 	defer resp.Body.Close()
 
 	raw, err := io.ReadAll(resp.Body)
 	if err != nil {
-		return "", err
+		return llmCallResult{}, err
 	}
 
 	var or openAIResponse
 	if err := json.Unmarshal(raw, &or); err != nil {
-		return "", fmt.Errorf("unmarshal response: %w (status %d)", err, resp.StatusCode)
+		return llmCallResult{}, fmt.Errorf("unmarshal response: %w (status %d)", err, resp.StatusCode)
 	}
 	if or.Error != nil {
-		return "", fmt.Errorf("api error: %s", or.Error.Message)
+		return llmCallResult{}, fmt.Errorf("api error: %s", or.Error.Message)
 	}
 	if len(or.Choices) > 0 {
-		return or.Choices[0].Message.Content, nil
+		return llmCallResult{
+			text:         or.Choices[0].Message.Content,
+			inputTokens:  or.Usage.PromptTokens,
+			outputTokens: or.Usage.CompletionTokens,
+			latencyMs:    latencyMs,
+		}, nil
 	}
-	return "", fmt.Errorf("no choices in response (status %d)", resp.StatusCode)
+	return llmCallResult{}, fmt.Errorf("no choices in response (status %d)", resp.StatusCode)
 }

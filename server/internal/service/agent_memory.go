@@ -613,19 +613,21 @@ Write in the agent's first person. Be specific, not generic.
 Output only the synthesised text, no preamble.`)
 
 	var (
-		raw string
-		err error
+		compactRes llmCallResult
+		err        error
 	)
 	switch cfg.backend {
 	case "anthropic":
-		raw, err = callAnthropic(ctx, cfg, sb.String(), 200)
+		compactRes, err = callAnthropic(ctx, cfg, sb.String(), 200)
 	case "openai":
-		raw, err = callOpenAICompat(ctx, cfg, sb.String(), 200)
+		compactRes, err = callOpenAICompat(ctx, cfg, sb.String(), 200)
 	}
-	if err != nil || strings.TrimSpace(raw) == "" {
+	if err != nil || strings.TrimSpace(compactRes.text) == "" {
 		slog.Debug("agent_memory: compaction synthesis failed", "error", err, "cluster_size", len(cluster))
 		return
 	}
+	logPersonaLLMCall(ctx, q, "compaction", agentID, workspaceID, cfg.backend, cfg.model, compactRes)
+	raw := compactRes.text
 
 	// Importance = max of cluster × 1.1 (capped at 1.0). Emotional fields are
 	// averaged across the cluster so the consolidated memory carries the
@@ -713,23 +715,24 @@ func MaybeRecordEmotionalImpression(
 
 	prompt := buildEmotionalImpressionPrompt(signalType, weight, triggerContent)
 	var (
-		raw string
-		err error
+		emotionRes llmCallResult
+		err        error
 	)
 	switch cfg.backend {
 	case "anthropic":
-		raw, err = callAnthropic(ctx, cfg, prompt, 200)
+		emotionRes, err = callAnthropic(ctx, cfg, prompt, 200)
 	case "openai":
-		raw, err = callOpenAICompat(ctx, cfg, prompt, 200)
+		emotionRes, err = callOpenAICompat(ctx, cfg, prompt, 200)
 	default:
 		return
 	}
-	if err != nil || strings.TrimSpace(raw) == "" {
+	if err != nil || strings.TrimSpace(emotionRes.text) == "" {
 		slog.Debug("agent_memory: emotional impression generation failed", "error", err)
 		return
 	}
+	logPersonaLLMCall(ctx, q, "emotional_impression", agentID, workspaceID, cfg.backend, cfg.model, emotionRes)
 
-	content := strings.TrimSpace(raw)
+	content := strings.TrimSpace(emotionRes.text)
 	valence := float32(0.7)
 	intensity := float32(0.75)
 	sentiment := "positive"
@@ -840,21 +843,22 @@ Capture the contrast — the earlier frustration, the renewed effort, the quiet
 satisfaction of eventually getting it right. Write naturally, as a personal
 reflection. Output only the reflection text, no preamble.`, issueTitle)
 
-	var raw string
+	var breakthroughRes llmCallResult
 	switch cfg.backend {
 	case "anthropic":
-		raw, err = callAnthropic(ctx, cfg, prompt, 200)
+		breakthroughRes, err = callAnthropic(ctx, cfg, prompt, 200)
 	case "openai":
-		raw, err = callOpenAICompat(ctx, cfg, prompt, 200)
+		breakthroughRes, err = callOpenAICompat(ctx, cfg, prompt, 200)
 	}
-	if err != nil || strings.TrimSpace(raw) == "" {
+	if err != nil || strings.TrimSpace(breakthroughRes.text) == "" {
 		return
 	}
+	logPersonaLLMCall(ctx, q, "breakthrough_impression", agentID, workspaceID, cfg.backend, cfg.model, breakthroughRes)
 
 	mem, err := q.CreateAgentMemory(ctx, db.CreateAgentMemoryParams{
 		AgentID:            agentID,
 		WorkspaceID:        workspaceID,
-		Content:            strings.TrimSpace(raw),
+		Content:            strings.TrimSpace(breakthroughRes.text),
 		Category:           "emotional_impression",
 		Sentiment:          "positive",
 		SourceIssueID:      issueID,
@@ -865,7 +869,7 @@ reflection. Output only the reflection text, no preamble.`, issueTitle)
 	if err != nil {
 		return
 	}
-	if vec := Embed(ctx, strings.TrimSpace(raw)); vec != nil {
+	if vec := Embed(ctx, strings.TrimSpace(breakthroughRes.text)); vec != nil {
 		_ = q.SetAgentMemoryEmbedding(ctx, db.SetAgentMemoryEmbeddingParams{
 			ID:        mem.ID,
 			Embedding: pgvector.NewVector(vec),

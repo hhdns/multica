@@ -591,6 +591,19 @@ type NotificationPreference struct {
 	UpdatedAt   pgtype.Timestamptz `json:"updated_at"`
 }
 
+type PersonaLlmCall struct {
+	ID           pgtype.UUID        `json:"id"`
+	AgentID      pgtype.UUID        `json:"agent_id"`
+	WorkspaceID  pgtype.UUID        `json:"workspace_id"`
+	CallType     string             `json:"call_type"`
+	Backend      string             `json:"backend"`
+	Model        string             `json:"model"`
+	InputTokens  int32              `json:"input_tokens"`
+	OutputTokens int32              `json:"output_tokens"`
+	LatencyMs    int32              `json:"latency_ms"`
+	CreatedAt    pgtype.Timestamptz `json:"created_at"`
+}
+
 type PersonalAccessToken struct {
 	ID          pgtype.UUID        `json:"id"`
 	UserID      pgtype.UUID        `json:"user_id"`
