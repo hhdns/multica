@@ -145,7 +145,13 @@ func (q *Queries) DeleteOldAgentMemories(ctx context.Context, agentID pgtype.UUI
 }
 
 const listAgentMemories = `-- name: ListAgentMemories :many
-SELECT id, agent_id, workspace_id, content, category, sentiment, source_issue_id, source_task_id, embedding, importance, created_at, emotional_valence, emotional_intensity, access_count, last_accessed_at, is_consolidated, source_count FROM agent_memory
+SELECT id, agent_id, workspace_id, content, category, sentiment,
+       source_issue_id, source_task_id, importance,
+       (embedding IS NOT NULL)::boolean AS has_embedding,
+       emotional_valence, emotional_intensity,
+       access_count, last_accessed_at,
+       is_consolidated, source_count, created_at
+FROM agent_memory
 WHERE agent_id = $1
 ORDER BY created_at DESC
 LIMIT $2
@@ -156,15 +162,35 @@ type ListAgentMemoriesParams struct {
 	Limit   int32       `json:"limit"`
 }
 
-func (q *Queries) ListAgentMemories(ctx context.Context, arg ListAgentMemoriesParams) ([]AgentMemory, error) {
+type ListAgentMemoriesRow struct {
+	ID                 pgtype.UUID        `json:"id"`
+	AgentID            pgtype.UUID        `json:"agent_id"`
+	WorkspaceID        pgtype.UUID        `json:"workspace_id"`
+	Content            string             `json:"content"`
+	Category           string             `json:"category"`
+	Sentiment          string             `json:"sentiment"`
+	SourceIssueID      pgtype.UUID        `json:"source_issue_id"`
+	SourceTaskID       pgtype.UUID        `json:"source_task_id"`
+	Importance         float32            `json:"importance"`
+	HasEmbedding       bool               `json:"has_embedding"`
+	EmotionalValence   float32            `json:"emotional_valence"`
+	EmotionalIntensity float32            `json:"emotional_intensity"`
+	AccessCount        int32              `json:"access_count"`
+	LastAccessedAt     pgtype.Timestamptz `json:"last_accessed_at"`
+	IsConsolidated     bool               `json:"is_consolidated"`
+	SourceCount        int32              `json:"source_count"`
+	CreatedAt          pgtype.Timestamptz `json:"created_at"`
+}
+
+func (q *Queries) ListAgentMemories(ctx context.Context, arg ListAgentMemoriesParams) ([]ListAgentMemoriesRow, error) {
 	rows, err := q.db.Query(ctx, listAgentMemories, arg.AgentID, arg.Limit)
 	if err != nil {
 		return nil, err
 	}
 	defer rows.Close()
-	items := []AgentMemory{}
+	items := []ListAgentMemoriesRow{}
 	for rows.Next() {
-		var i AgentMemory
+		var i ListAgentMemoriesRow
 		if err := rows.Scan(
 			&i.ID,
 			&i.AgentID,
@@ -174,15 +200,15 @@ func (q *Queries) ListAgentMemories(ctx context.Context, arg ListAgentMemoriesPa
 			&i.Sentiment,
 			&i.SourceIssueID,
 			&i.SourceTaskID,
-			&i.Embedding,
 			&i.Importance,
-			&i.CreatedAt,
+			&i.HasEmbedding,
 			&i.EmotionalValence,
 			&i.EmotionalIntensity,
 			&i.AccessCount,
 			&i.LastAccessedAt,
 			&i.IsConsolidated,
 			&i.SourceCount,
+			&i.CreatedAt,
 		); err != nil {
 			return nil, err
 		}

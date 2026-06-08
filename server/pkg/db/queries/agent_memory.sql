@@ -21,7 +21,13 @@ SET access_count     = access_count + 1,
 WHERE id = ANY($1::uuid[]);
 
 -- name: ListAgentMemories :many
-SELECT * FROM agent_memory
+SELECT id, agent_id, workspace_id, content, category, sentiment,
+       source_issue_id, source_task_id, importance,
+       (embedding IS NOT NULL)::boolean AS has_embedding,
+       emotional_valence, emotional_intensity,
+       access_count, last_accessed_at,
+       is_consolidated, source_count, created_at
+FROM agent_memory
 WHERE agent_id = $1
 ORDER BY created_at DESC
 LIMIT $2;

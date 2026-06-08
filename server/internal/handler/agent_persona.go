@@ -353,7 +353,7 @@ func (h *Handler) ListAgentMemories(w http.ResponseWriter, r *http.Request) {
 			Category:       m.Category,
 			Sentiment:      m.Sentiment,
 			Importance:     m.Importance,
-			HasEmbedding:   len(m.Embedding.Slice()) > 0,
+			HasEmbedding:   m.HasEmbedding,
 			IsConsolidated: m.IsConsolidated,
 			SourceCount:    m.SourceCount,
 			CreatedAt:      m.CreatedAt.Time.Format("2006-01-02T15:04:05Z07:00"),
