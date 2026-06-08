@@ -111,6 +111,21 @@ services:
       MULTICA_LARK_SECRET_KEY: ${MULTICA_LARK_SECRET_KEY:-}
       MULTICA_LARK_HTTP_BASE_URL: ${MULTICA_LARK_HTTP_BASE_URL:-}
       MULTICA_LARK_CALLBACK_BASE_URL: ${MULTICA_LARK_CALLBACK_BASE_URL:-}
+      # AI / Persona — agent personality, memory, and episodic recall.
+      # Leave all empty to disable; the server degrades gracefully.
+      # Text generation (persona synthesis, comment classification):
+      ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-}
+      PERSONA_SYNTHESIS_BASE_URL: ${PERSONA_SYNTHESIS_BASE_URL:-}
+      PERSONA_SYNTHESIS_API_KEY: ${PERSONA_SYNTHESIS_API_KEY:-}
+      PERSONA_SYNTHESIS_ENABLED: ${PERSONA_SYNTHESIS_ENABLED:-}
+      # Embedding (semantic memory search). PERSONA_EMBEDDING_BASE_URL
+      # takes priority; falls back to PERSONA_SYNTHESIS_BASE_URL if unset.
+      # When running --profile embeddings, set:
+      #   PERSONA_EMBEDDING_BASE_URL=http://embeddings:11434/v1
+      #   PERSONA_EMBEDDING_MODEL=nomic-embed-text
+      PERSONA_EMBEDDING_BASE_URL: ${PERSONA_EMBEDDING_BASE_URL:-}
+      PERSONA_EMBEDDING_API_KEY: ${PERSONA_EMBEDDING_API_KEY:-}
+      PERSONA_EMBEDDING_MODEL: ${PERSONA_EMBEDDING_MODEL:-}
     restart: unless-stopped
 
   frontend:
@@ -123,6 +138,36 @@ services:
       HOSTNAME: "0.0.0.0"
     restart: unless-stopped
 
+  # Optional: built-in CPU embedding service (Ollama).
+  # Starts the Ollama server and pulls the embedding model in one container.
+  # Re-pulling on restart is a no-op when the model is already cached.
+  # Start with: docker compose -f docker-compose.selfhost.yml --profile embeddings up -d
+  # Then add to .env:
+  #   PERSONA_EMBEDDING_BASE_URL=http://embeddings:11434/v1
+  #   PERSONA_EMBEDDING_MODEL=nomic-embed-text
+  embeddings:
+    image: ollama/ollama:latest
+    profiles: ["embeddings"]
+    entrypoint: ["/bin/sh", "-c"]
+    command:
+      - |
+        ollama serve &
+        until curl -sf http://localhost:11434 > /dev/null 2>&1; do sleep 1; done
+        ollama pull $${PERSONA_EMBEDDING_MODEL:-nomic-embed-text}
+        wait
+    environment:
+      PERSONA_EMBEDDING_MODEL: ${PERSONA_EMBEDDING_MODEL:-nomic-embed-text}
+    volumes:
+      - embeddings_cache:/root/.ollama
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD-SHELL", "curl -sf http://localhost:11434/api/tags || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+      start_period: 90s
+
 volumes:
   pgdata:
   backend_uploads:
+  embeddings_cache:

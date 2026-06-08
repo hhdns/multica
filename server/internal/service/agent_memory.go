@@ -54,11 +54,32 @@ func resolveEmbedConfig() embedConfig {
 		return embedConfig{}
 	}
 
-	// OpenAI-compat endpoint (covers Ollama nomic-embed-text, local vLLM, etc.)
-	if base := os.Getenv("PERSONA_SYNTHESIS_BASE_URL"); base != "" {
-		model := os.Getenv("PERSONA_EMBEDDING_MODEL")
+	model := os.Getenv("PERSONA_EMBEDDING_MODEL")
+
+	// Dedicated embedding base URL — takes precedence over PERSONA_SYNTHESIS_BASE_URL.
+	// Use this when the embedding model is served at a different endpoint than the
+	// text-generation model (e.g. vLLM serving Qwen3-6-27b for chat and a separate
+	// embedding model at a different port or host).
+	if base := os.Getenv("PERSONA_EMBEDDING_BASE_URL"); base != "" {
 		if model == "" {
-			model = "nomic-embed-text" // sensible default for Ollama
+			model = "text-embedding-3-small"
+		}
+		apiKey := os.Getenv("PERSONA_EMBEDDING_API_KEY")
+		if apiKey == "" {
+			apiKey = os.Getenv("PERSONA_SYNTHESIS_API_KEY")
+		}
+		return embedConfig{
+			endpoint: strings.TrimRight(base, "/") + "/embeddings",
+			apiKey:   apiKey,
+			model:    model,
+		}
+	}
+
+	// Shared OpenAI-compat endpoint — embedding served at the same base URL as
+	// text generation (e.g. Ollama running both nomic-embed-text and a chat model).
+	if base := os.Getenv("PERSONA_SYNTHESIS_BASE_URL"); base != "" {
+		if model == "" {
+			model = "nomic-embed-text"
 		}
 		return embedConfig{
 			endpoint: strings.TrimRight(base, "/") + "/embeddings",
@@ -69,7 +90,6 @@ func resolveEmbedConfig() embedConfig {
 
 	// OpenAI direct
 	if key := os.Getenv("OPENAI_API_KEY"); key != "" {
-		model := os.Getenv("PERSONA_EMBEDDING_MODEL")
 		if model == "" {
 			model = "text-embedding-3-small"
 		}
