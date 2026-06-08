@@ -18,7 +18,8 @@ import (
 )
 
 const (
-	// Maximum number of memories retained per agent. Oldest are pruned.
+	// Maximum number of memories retained per agent. Pruning uses a
+	// multi-factor retention score, not pure age — see DeleteOldAgentMemories.
 	memoryRetentionLimit = 200
 	// Number of memories retrieved for a task context injection.
 	memorySearchTopK = 5
@@ -152,16 +153,20 @@ func RecordTaskMemory(
 	content string,
 	sentiment string, // "positive", "negative", "neutral"
 	importance float32,
+	emotionalValence float32,
+	emotionalIntensity float32,
 ) {
 	mem, err := q.CreateAgentMemory(ctx, db.CreateAgentMemoryParams{
-		AgentID:       agentID,
-		WorkspaceID:   workspaceID,
-		Content:       content,
-		Category:      "task_outcome",
-		Sentiment:     sentiment,
-		SourceIssueID: issueID,
-		SourceTaskID:  taskID,
-		Importance:    importance,
+		AgentID:            agentID,
+		WorkspaceID:        workspaceID,
+		Content:            content,
+		Category:           "task_outcome",
+		Sentiment:          sentiment,
+		SourceIssueID:      issueID,
+		SourceTaskID:       taskID,
+		Importance:         importance,
+		EmotionalValence:   emotionalValence,
+		EmotionalIntensity: emotionalIntensity,
 	})
 	if err != nil {
 		slog.Warn("agent_memory: create failed", "error", err, "agent_id", agentID)
@@ -220,12 +225,12 @@ func SearchRelevantMemories(
 	}
 
 	var b strings.Builder
-	count := 0
+	var accessedIDs []pgtype.UUID
 	for _, r := range results {
 		if r.Similarity < memoryMinSimilarity {
 			continue
 		}
-		if count == 0 {
+		if len(accessedIDs) == 0 {
 			b.WriteString("## Relevant Past Experience\n\n")
 			b.WriteString("These memories from your past work may be relevant to the current task:\n\n")
 		}
@@ -237,7 +242,15 @@ func SearchRelevantMemories(
 			sentiment = " ✗"
 		}
 		fmt.Fprintf(&b, "- %s%s\n", r.Content, sentiment)
-		count++
+		accessedIDs = append(accessedIDs, r.ID)
+	}
+
+	// Bump access counts for memories that surfaced — frequently-recalled
+	// memories score higher on retention and are less likely to be pruned.
+	if len(accessedIDs) > 0 {
+		if err := q.BumpMemoryAccess(ctx, accessedIDs); err != nil {
+			slog.Debug("agent_memory: bump access failed", "error", err)
+		}
 	}
 
 	return b.String()

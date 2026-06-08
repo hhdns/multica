@@ -2213,13 +2213,18 @@ func (h *Handler) recordTaskOutcomeMemory(
 
 	sentiment := "positive"
 	importance := float32(0.5)
+	emotionalValence := float32(0.4)   // mild satisfaction for a routine success
+	emotionalIntensity := float32(0.3) // low intensity — unremarkable completion
 	if outcomeType == "failed" {
 		sentiment = "negative"
-		importance = 0.65 // failures carry slightly more weight — learn from them
+		importance = 0.65          // failures carry more weight — learn from them
+		emotionalValence = -0.5    // frustration / setback
+		emotionalIntensity = 0.55  // failures are more vivid than routine successes
 	}
 
 	wsUUID := parseUUID(workspaceID)
-	service.RecordTaskMemory(ctx, h.Queries, task.AgentID, wsUUID, task.IssueID, task.ID, content, sentiment, importance)
+	service.RecordTaskMemory(ctx, h.Queries, task.AgentID, wsUUID, task.IssueID, task.ID,
+		content, sentiment, importance, emotionalValence, emotionalIntensity)
 }
 
 // ---------------------------------------------------------------------------
