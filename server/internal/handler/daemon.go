@@ -2193,10 +2193,12 @@ func (h *Handler) recordTaskOutcomeMemory(
 		return
 	}
 
-	// Fetch the issue title for a meaningful memory summary.
+	// Fetch the issue for the memory summary and importance scoring.
 	var issueTitle string
-	if issue, err := h.Queries.GetIssue(ctx, task.IssueID); err == nil {
-		issueTitle = issue.Title
+	var issue db.Issue
+	if i, err := h.Queries.GetIssue(ctx, task.IssueID); err == nil {
+		issue = i
+		issueTitle = i.Title
 	}
 
 	// Derive trigger type from task fields.
@@ -2212,19 +2214,16 @@ func (h *Handler) recordTaskOutcomeMemory(
 	content := service.SummarizeTaskOutcome(ctx, issueTitle, outcomeType, triggerType)
 
 	sentiment := "positive"
-	importance := float32(0.5)
-	emotionalValence := float32(0.4)   // mild satisfaction for a routine success
-	emotionalIntensity := float32(0.3) // low intensity — unremarkable completion
 	if outcomeType == "failed" {
 		sentiment = "negative"
-		importance = 0.65          // failures carry more weight — learn from them
-		emotionalValence = -0.5    // frustration / setback
-		emotionalIntensity = 0.55  // failures are more vivid than routine successes
 	}
+
+	// Compute context-aware importance + emotional scores.
+	importance, valence, intensity := service.ScoreTaskMemory(ctx, h.Queries, task.AgentID, issue, task, outcomeType)
 
 	wsUUID := parseUUID(workspaceID)
 	service.RecordTaskMemory(ctx, h.Queries, task.AgentID, wsUUID, task.IssueID, task.ID,
-		content, sentiment, importance, emotionalValence, emotionalIntensity)
+		content, sentiment, importance, valence, intensity)
 }
 
 // ---------------------------------------------------------------------------

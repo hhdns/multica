@@ -277,6 +277,100 @@ func recentMemoriesFallback(ctx context.Context, q *db.Queries, agentID pgtype.U
 	return b.String()
 }
 
+// ScoreTaskMemory computes importance, emotional_valence, and emotional_intensity
+// for a task outcome memory based on contextual signals available at record time.
+//
+// Base values:
+//   - completed: importance 0.50, valence +0.40, intensity 0.30
+//   - failed:    importance 0.65, valence -0.50, intensity 0.55
+//
+// Adjustments applied on top of base:
+//   +0.15 importance / +0.15 intensity  — issue had ≥5 comments (complex task)
+//   +0.05 importance                    — issue had 2-4 comments (moderate)
+//   +0.10 importance / +0.20 valence    — completed and issue is already done
+//                                          (human confirmed the work)
+//   +0.20 importance / +0.15 intensity  — re-trigger on previously-failed issue
+//                                          (this is a genuine learning moment)
+//   -0.10 importance / -0.10 intensity  — pure autopilot run, no human comment
+//                                          (routine, less memorable)
+func ScoreTaskMemory(
+	ctx context.Context,
+	q *db.Queries,
+	agentID pgtype.UUID,
+	issue db.Issue,
+	task *db.AgentTaskQueue,
+	outcomeType string,
+) (importance, valence, intensity float32) {
+	// Base values by outcome.
+	if outcomeType == "failed" {
+		importance, valence, intensity = 0.65, -0.50, 0.55
+	} else {
+		importance, valence, intensity = 0.50, 0.40, 0.30
+	}
+
+	// Issue complexity: comment count as a proxy.
+	commentCount, err := q.CountComments(ctx, db.CountCommentsParams{
+		IssueID:     issue.ID,
+		WorkspaceID: issue.WorkspaceID,
+	})
+	if err == nil {
+		switch {
+		case commentCount >= 5:
+			importance += 0.15
+			intensity += 0.15
+		case commentCount >= 2:
+			importance += 0.05
+		}
+	}
+
+	// Human confirmed: issue closed after successful completion.
+	if outcomeType == "completed" && (issue.Status == "done" || issue.Status == "cancelled") {
+		importance += 0.10
+		valence += 0.20
+		intensity += 0.10
+	}
+
+	// Re-trigger: check whether this issue has a recent failed memory.
+	// A second attempt after failure is a genuine learning moment.
+	if task != nil && (task.TriggerCommentID.Valid || task.ChatSessionID.Valid) {
+		if past, err := q.ListMemoriesForIssue(ctx, db.ListMemoriesForIssueParams{
+			AgentID:       agentID,
+			SourceIssueID: issue.ID,
+			Limit:         5,
+		}); err == nil {
+			for _, m := range past {
+				if m.Sentiment == "negative" {
+					importance += 0.20
+					intensity += 0.15
+					break
+				}
+			}
+		}
+	}
+
+	// Pure autopilot run with no human trigger → less memorable.
+	if task != nil && task.AutopilotRunID.Valid && !task.TriggerCommentID.Valid && !task.ChatSessionID.Valid {
+		importance -= 0.10
+		intensity -= 0.10
+	}
+
+	// Clamp to valid ranges.
+	importance = clamp32(importance, 0.10, 1.0)
+	valence = clamp32(valence, -1.0, 1.0)
+	intensity = clamp32(intensity, 0.0, 1.0)
+	return
+}
+
+func clamp32(v, lo, hi float32) float32 {
+	if v < lo {
+		return lo
+	}
+	if v > hi {
+		return hi
+	}
+	return v
+}
+
 // SummarizeTaskOutcome generates a short memory string from task completion
 // data. Called by task completion / failure handlers before RecordTaskMemory.
 // Returns a 1-3 sentence human-readable summary suitable for storage and

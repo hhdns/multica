@@ -179,6 +179,47 @@ func (q *Queries) ListAgentMemories(ctx context.Context, arg ListAgentMemoriesPa
 	return items, nil
 }
 
+const listMemoriesForIssue = `-- name: ListMemoriesForIssue :many
+SELECT id, sentiment, created_at FROM agent_memory
+WHERE agent_id = $1 AND source_issue_id = $2
+ORDER BY created_at DESC
+LIMIT $3
+`
+
+type ListMemoriesForIssueParams struct {
+	AgentID       pgtype.UUID `json:"agent_id"`
+	SourceIssueID pgtype.UUID `json:"source_issue_id"`
+	Limit         int32       `json:"limit"`
+}
+
+type ListMemoriesForIssueRow struct {
+	ID        pgtype.UUID        `json:"id"`
+	Sentiment string             `json:"sentiment"`
+	CreatedAt pgtype.Timestamptz `json:"created_at"`
+}
+
+// Returns recent memories for a specific agent + issue pair, newest first.
+// Used to detect re-trigger scenarios (previously failed = higher importance).
+func (q *Queries) ListMemoriesForIssue(ctx context.Context, arg ListMemoriesForIssueParams) ([]ListMemoriesForIssueRow, error) {
+	rows, err := q.db.Query(ctx, listMemoriesForIssue, arg.AgentID, arg.SourceIssueID, arg.Limit)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []ListMemoriesForIssueRow{}
+	for rows.Next() {
+		var i ListMemoriesForIssueRow
+		if err := rows.Scan(&i.ID, &i.Sentiment, &i.CreatedAt); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const searchAgentMemories = `-- name: SearchAgentMemories :many
 SELECT
     id,

@@ -56,6 +56,14 @@ LIMIT $3;
 -- name: CountAgentMemories :one
 SELECT COUNT(*) FROM agent_memory WHERE agent_id = $1;
 
+-- name: ListMemoriesForIssue :many
+-- Returns recent memories for a specific agent + issue pair, newest first.
+-- Used to detect re-trigger scenarios (previously failed = higher importance).
+SELECT id, sentiment, created_at FROM agent_memory
+WHERE agent_id = $1 AND source_issue_id = $2
+ORDER BY created_at DESC
+LIMIT $3;
+
 -- name: DeleteOldAgentMemories :exec
 -- Prune memories beyond the retention limit using a multi-factor retention
 -- score rather than pure age. Keeps the memories most worth remembering:
