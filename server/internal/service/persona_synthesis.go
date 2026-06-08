@@ -24,7 +24,7 @@ const (
 	synthesisAfterBatches = 3
 
 	anthropicMessagesPath = "/v1/messages"
-	openAIChatPath        = "/v1/chat/completions"
+	openAIChatPath        = "/chat/completions"
 )
 
 // synthesisConfig is resolved once per call from environment variables.
