@@ -153,7 +153,7 @@ services:
       - |
         ollama serve &
         until curl -sf http://localhost:11434 > /dev/null 2>&1; do sleep 1; done
-        ollama pull $${PERSONA_EMBEDDING_MODEL:-nomic-embed-text}
+        ollama pull $${PERSONA_EMBEDDING_MODEL:-bge-m3}
         wait
     environment:
       PERSONA_EMBEDDING_MODEL: ${PERSONA_EMBEDDING_MODEL:-nomic-embed-text}
