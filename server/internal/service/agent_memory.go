@@ -877,19 +877,8 @@ reflection. Output only the reflection text, no preamble.`, issueTitle)
 	}
 }
 
-// SummarizeTaskOutcome generates a short memory string from task completion
-// data. Called by task completion / failure handlers before RecordTaskMemory.
-// Returns a 1-3 sentence human-readable summary suitable for storage and
-// embedding. Falls back to a generic string if the LLM call fails.
-func SummarizeTaskOutcome(
-	ctx context.Context,
-	issueTitle string,
-	outcomeType string, // "completed" | "failed"
-	triggerType string, // "on_assign" | "comment" | "chat" | "autopilot"
-) string {
-	// Build a short summary without LLM — simple and cheap.
-	// For Phase 5 MVP, this is deterministic. A future iteration can replace
-	// it with a Haiku call to extract key decisions from the task log.
+// summarizeTaskFallback returns a simple template string when LLM is unavailable.
+func summarizeTaskFallback(issueTitle, outcomeType, triggerType string) string {
 	action := "completed"
 	if outcomeType == "failed" {
 		action = "attempted but did not complete"
@@ -907,4 +896,108 @@ func SummarizeTaskOutcome(
 		return fmt.Sprintf("I %s work on: %s%s.", action, issueTitle, trigger)
 	}
 	return fmt.Sprintf("I %s a task%s.", action, trigger)
+}
+
+// buildTaskTranscript fetches messages for a task and returns a condensed
+// transcript suitable for use in an LLM prompt. Only text and tool_use rows
+// are included; thinking and tool_result are skipped to keep it concise.
+// The result is capped at maxChars characters.
+func buildTaskTranscript(ctx context.Context, q *db.Queries, taskID pgtype.UUID, maxChars int) string {
+	msgs, err := q.ListTaskMessages(ctx, taskID)
+	if err != nil || len(msgs) == 0 {
+		return ""
+	}
+
+	var sb strings.Builder
+	for _, m := range msgs {
+		switch m.Type {
+		case "text":
+			if m.Content.Valid && m.Content.String != "" {
+				line := strings.TrimSpace(m.Content.String)
+				if len(line) > 400 {
+					line = line[:400] + "…"
+				}
+				sb.WriteString("[agent] ")
+				sb.WriteString(line)
+				sb.WriteByte('\n')
+			}
+		case "tool_use":
+			if m.Tool.Valid && m.Tool.String != "" {
+				sb.WriteString("[tool] ")
+				sb.WriteString(m.Tool.String)
+				sb.WriteByte('\n')
+			}
+		}
+		if sb.Len() >= maxChars {
+			break
+		}
+	}
+	return strings.TrimSpace(sb.String())
+}
+
+// SummarizeTaskOutcome generates a first-person episodic memory for a completed
+// or failed task. Uses the configured LLM backend when available, falling back
+// to a deterministic template string otherwise.
+func SummarizeTaskOutcome(
+	ctx context.Context,
+	q *db.Queries,
+	agentID, workspaceID, taskID pgtype.UUID,
+	issueTitle string,
+	outcomeType string, // "completed" | "failed"
+	triggerType string, // "on_assign" | "comment" | "chat" | "autopilot"
+) string {
+	cfg := resolveSynthesisConfig()
+	if cfg.backend == "" {
+		return summarizeTaskFallback(issueTitle, outcomeType, triggerType)
+	}
+
+	transcript := buildTaskTranscript(ctx, q, taskID, 2500)
+
+	outcomeWord := "successfully completed"
+	if outcomeType == "failed" {
+		outcomeWord = "attempted but did not complete"
+	}
+	triggerPhrase := ""
+	switch triggerType {
+	case "comment":
+		triggerPhrase = " triggered by a human comment"
+	case "chat":
+		triggerPhrase = " started via chat"
+	case "autopilot":
+		triggerPhrase = " run by autopilot"
+	}
+
+	prompt := fmt.Sprintf(
+		`You are writing a first-person episodic memory for an AI agent.
+
+Task: %q
+Outcome: %s%s
+
+Agent activity log:
+%s
+
+Write 2-3 sentences in the agent's first person capturing what actually happened:
+what was done, any key decision or finding, and what (if anything) was learned.
+Be specific—avoid generic phrases like "I completed the task" or "I attempted the work".
+Do not mention token counts, tool names, or implementation details.
+Output only the memory text, no preamble.`,
+		issueTitle, outcomeWord, triggerPhrase, transcript,
+	)
+
+	var (
+		res llmCallResult
+		err error
+	)
+	switch cfg.backend {
+	case "anthropic":
+		res, err = callAnthropic(ctx, cfg, prompt, 200)
+	case "openai":
+		res, err = callOpenAICompat(ctx, cfg, prompt, 200)
+	}
+	if err != nil || strings.TrimSpace(res.text) == "" {
+		slog.Debug("agent_memory: task outcome summarization failed", "error", err)
+		return summarizeTaskFallback(issueTitle, outcomeType, triggerType)
+	}
+	logPersonaLLMCall(ctx, q, "task_summary", agentID, workspaceID, cfg.backend, cfg.model, res)
+	return strings.TrimSpace(res.text)
 }

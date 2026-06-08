@@ -2211,7 +2211,9 @@ func (h *Handler) recordTaskOutcomeMemory(
 		triggerType = "autopilot"
 	}
 
-	content := service.SummarizeTaskOutcome(ctx, issueTitle, outcomeType, triggerType)
+	wsUUID := parseUUID(workspaceID)
+	content := service.SummarizeTaskOutcome(ctx, h.Queries, task.AgentID, wsUUID, task.ID,
+		issueTitle, outcomeType, triggerType)
 
 	sentiment := "positive"
 	if outcomeType == "failed" {
@@ -2221,7 +2223,6 @@ func (h *Handler) recordTaskOutcomeMemory(
 	// Compute context-aware importance + emotional scores.
 	importance, valence, intensity := service.ScoreTaskMemory(ctx, h.Queries, task.AgentID, issue, task, outcomeType)
 
-	wsUUID := parseUUID(workspaceID)
 	service.RecordTaskMemory(ctx, h.Queries, task.AgentID, wsUUID, task.IssueID, task.ID,
 		content, sentiment, importance, valence, intensity)
 
