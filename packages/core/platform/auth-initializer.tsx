@@ -64,6 +64,7 @@ export function AuthInitializer({
           workspaceCreationDisabled: cfg.workspace_creation_disabled === true,
           // Old servers omit this field — treat absence as "" (disabled).
           personaSynthesisBackend: cfg.persona_synthesis_backend ?? "",
+          embeddingModelStale: cfg.embedding_model_stale === true,
         });
         configStore.getState().setDaemonConfig({
           daemonServerUrl: cfg.daemon_server_url,

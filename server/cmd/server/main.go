@@ -326,6 +326,10 @@ func main() {
 		Handler: r,
 	}
 
+	// Check whether the configured embedding model matches the one used to
+	// generate existing vectors. Sets the in-memory stale flag read by /api/config.
+	service.InitEmbeddingModelCheck(context.Background(), queries)
+
 	// Start background workers.
 	sweepCtx, sweepCancel := context.WithCancel(context.Background())
 	autopilotCtx, autopilotCancel := context.WithCancel(context.Background())

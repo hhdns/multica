@@ -42,6 +42,8 @@ export interface AppConfigResponse {
   // "anthropic" | "openai" | "" — which LLM backend is configured server-side.
   // Absent (treated as "") when the server is older and doesn't send the field.
   persona_synthesis_backend?: string;
+  // true when PERSONA_EMBEDDING_MODEL changed since embeddings were last generated.
+  embedding_model_stale?: boolean;
 }
 
 // ---------------------------------------------------------------------------
@@ -183,6 +185,7 @@ export const AppConfigSchema = z.object({
   daemon_app_url: OptionalStringSchema,
   workspace_creation_disabled: BooleanWithDefaultSchema(false).optional(),
   persona_synthesis_backend: OptionalStringSchema,
+  embedding_model_stale: z.boolean().optional(),
 }).loose();
 
 export const EMPTY_APP_CONFIG: AppConfigResponse = {

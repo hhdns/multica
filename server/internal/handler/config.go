@@ -50,6 +50,11 @@ type AppConfig struct {
 	// "anthropic", "openai" (OpenAI-compat / Ollama / vLLM), or "" (disabled).
 	// Never includes the actual API key — safe to expose to authenticated users.
 	PersonaSynthesisBackend string `json:"persona_synthesis_backend,omitempty"`
+	// EmbeddingModelStale is true when PERSONA_EMBEDDING_MODEL has changed since
+	// embeddings were last generated, meaning existing vectors are incompatible
+	// with the current model and semantic memory search will return bad results.
+	// Cleared after a successful rebuild via POST /api/workspaces/{id}/memories/rebuild-embeddings.
+	EmbeddingModelStale bool `json:"embedding_model_stale,omitempty"`
 }
 
 // GetConfig is mounted on the public (unauthenticated) route group because
@@ -68,6 +73,7 @@ func (h *Handler) GetConfig(w http.ResponseWriter, r *http.Request) {
 	config.CdnSigned = h.CFSigner != nil
 	config.DaemonServerURL, config.DaemonAppURL = daemonSetupURLsFromEnv()
 	config.PersonaSynthesisBackend = service.ResolveSynthesisBackend()
+	config.EmbeddingModelStale = service.IsEmbeddingModelStale()
 
 	// Re-read from env on every request so operators can rotate keys via
 	// secret refresh without a server restart.

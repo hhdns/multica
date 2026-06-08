@@ -371,3 +371,24 @@ func (h *Handler) ListAgentMemories(w http.ResponseWriter, r *http.Request) {
 func RecordTaskSignal(ctx context.Context, q *db.Queries, agentID, workspaceID pgtype.UUID, signalType, content string) {
 	service.RecordCommentSignal(ctx, q, agentID, workspaceID, signalType, 0.5, content, pgtype.UUID{}, pgtype.UUID{})
 }
+
+// RebuildEmbeddings handles POST /api/workspaces/{id}/memories/rebuild-embeddings.
+// Nullifies all memory embeddings for the workspace and re-generates them with
+// the current embedding model. Returns 202 immediately; rebuild runs in a goroutine.
+func (h *Handler) RebuildEmbeddings(w http.ResponseWriter, r *http.Request) {
+	wsID, ok := parseUUIDOrBadRequest(w, chi.URLParam(r, "id"), "workspace id")
+	if !ok {
+		return
+	}
+
+	go func() {
+		ctx := context.Background()
+		if err := service.RebuildWorkspaceEmbeddings(ctx, h.Queries, wsID); err != nil {
+			slog.Warn("rebuild embeddings: failed", "workspace_id", wsID, "error", err)
+			return
+		}
+		slog.Info("rebuild embeddings: completed", "workspace_id", wsID)
+	}()
+
+	writeJSON(w, http.StatusAccepted, map[string]string{"status": "started"})
+}

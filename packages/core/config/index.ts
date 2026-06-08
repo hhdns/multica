@@ -18,12 +18,16 @@ interface ConfigState {
   // "" = disabled, "anthropic" or "openai" = configured. Used to surface a
   // proactive hint in the persona tab before the user tries to synthesize.
   personaSynthesisBackend: string;
+  // true when PERSONA_EMBEDDING_MODEL changed since embeddings were generated —
+  // old vectors are incompatible and semantic memory search will return garbage.
+  embeddingModelStale: boolean;
   setCdnConfig: (config: { cdnDomain: string; cdnSigned?: boolean }) => void;
   setAuthConfig: (config: {
     allowSignup: boolean;
     googleClientId?: string;
     workspaceCreationDisabled?: boolean;
     personaSynthesisBackend?: string;
+    embeddingModelStale?: boolean;
   }) => void;
   setDaemonConfig: (config: {
     daemonServerUrl?: string;
@@ -40,13 +44,15 @@ export const configStore = createStore<ConfigState>((set) => ({
   daemonAppUrl: "",
   workspaceCreationDisabled: false,
   personaSynthesisBackend: "",
+  embeddingModelStale: false,
   setCdnConfig: ({ cdnDomain, cdnSigned = false }) => set({ cdnDomain, cdnSigned }),
   setAuthConfig: ({
     allowSignup,
     googleClientId = "",
     workspaceCreationDisabled = false,
     personaSynthesisBackend = "",
-  }) => set({ allowSignup, googleClientId, workspaceCreationDisabled, personaSynthesisBackend }),
+    embeddingModelStale = false,
+  }) => set({ allowSignup, googleClientId, workspaceCreationDisabled, personaSynthesisBackend, embeddingModelStale }),
   setDaemonConfig: ({ daemonServerUrl = "", daemonAppUrl = "" }) =>
     set({ daemonServerUrl, daemonAppUrl }),
 }));

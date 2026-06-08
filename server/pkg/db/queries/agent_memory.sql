@@ -82,6 +82,19 @@ WHERE agent_id = $1 AND source_issue_id = $2
 ORDER BY created_at DESC
 LIMIT $3;
 
+-- name: NullifyWorkspaceEmbeddings :exec
+-- Clears all embeddings for a workspace so they can be regenerated with a
+-- new embedding model. Called from the rebuild-embeddings admin endpoint.
+UPDATE agent_memory SET embedding = NULL WHERE workspace_id = $1;
+
+-- name: ListMemoriesNeedingEmbedding :many
+-- Returns memories without embeddings for a workspace, oldest first, for
+-- batched re-embedding after a model change.
+SELECT id, content FROM agent_memory
+WHERE workspace_id = $1 AND embedding IS NULL
+ORDER BY created_at ASC
+LIMIT $2 OFFSET $3;
+
 -- name: DeleteOldAgentMemories :exec
 -- Tiered retention pruning: each category group has its own cap so high-value
 -- emotional and skill memories cannot be crowded out by routine task episodes.

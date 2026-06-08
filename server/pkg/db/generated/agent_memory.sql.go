@@ -314,6 +314,57 @@ func (q *Queries) ListMemoriesForIssue(ctx context.Context, arg ListMemoriesForI
 	return items, nil
 }
 
+const listMemoriesNeedingEmbedding = `-- name: ListMemoriesNeedingEmbedding :many
+SELECT id, content FROM agent_memory
+WHERE workspace_id = $1 AND embedding IS NULL
+ORDER BY created_at ASC
+LIMIT $2 OFFSET $3
+`
+
+type ListMemoriesNeedingEmbeddingParams struct {
+	WorkspaceID pgtype.UUID `json:"workspace_id"`
+	Limit       int32       `json:"limit"`
+	Offset      int32       `json:"offset"`
+}
+
+type ListMemoriesNeedingEmbeddingRow struct {
+	ID      pgtype.UUID `json:"id"`
+	Content string      `json:"content"`
+}
+
+// Returns memories without embeddings for a workspace, oldest first, for
+// batched re-embedding after a model change.
+func (q *Queries) ListMemoriesNeedingEmbedding(ctx context.Context, arg ListMemoriesNeedingEmbeddingParams) ([]ListMemoriesNeedingEmbeddingRow, error) {
+	rows, err := q.db.Query(ctx, listMemoriesNeedingEmbedding, arg.WorkspaceID, arg.Limit, arg.Offset)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []ListMemoriesNeedingEmbeddingRow{}
+	for rows.Next() {
+		var i ListMemoriesNeedingEmbeddingRow
+		if err := rows.Scan(&i.ID, &i.Content); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const nullifyWorkspaceEmbeddings = `-- name: NullifyWorkspaceEmbeddings :exec
+UPDATE agent_memory SET embedding = NULL WHERE workspace_id = $1
+`
+
+// Clears all embeddings for a workspace so they can be regenerated with a
+// new embedding model. Called from the rebuild-embeddings admin endpoint.
+func (q *Queries) NullifyWorkspaceEmbeddings(ctx context.Context, workspaceID pgtype.UUID) error {
+	_, err := q.db.Exec(ctx, nullifyWorkspaceEmbeddings, workspaceID)
+	return err
+}
+
 const searchAgentMemories = `-- name: SearchAgentMemories :many
 SELECT
     id,

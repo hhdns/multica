@@ -11,6 +11,7 @@ import (
 	"net/http"
 	"os"
 	"strings"
+	"sync/atomic"
 	"time"
 
 	"github.com/jackc/pgx/v5/pgtype"
@@ -30,7 +31,96 @@ const (
 	memorySearchTopK = 5
 	// Minimum cosine similarity threshold to include a memory in the brief.
 	memoryMinSimilarity = 0.70
+
+	// system_config key that stores the embedding model used to generate
+	// existing vectors. Compared against the live env var on startup to
+	// detect when a model change makes old embeddings stale.
+	embeddingModelConfigKey = "embedding_model"
+
+	// rebuildBatchSize is the number of memories re-embedded per iteration
+	// during a rebuild so the embedding service isn't overwhelmed.
+	rebuildBatchSize = 20
 )
+
+// embeddingModelStale is an in-memory flag set on startup (InitEmbeddingModelCheck)
+// and cleared after a successful rebuild. Read by GetConfig without a DB query.
+var embeddingModelStale atomic.Bool
+
+// CurrentEmbeddingModel returns the embedding model name from env, defaulting
+// to bge-m3 — the same default used by resolveEmbedConfig.
+func CurrentEmbeddingModel() string {
+	if m := os.Getenv("PERSONA_EMBEDDING_MODEL"); m != "" {
+		return m
+	}
+	return "bge-m3"
+}
+
+// InitEmbeddingModelCheck compares the live embedding model against the value
+// stored in system_config and sets the in-memory stale flag accordingly.
+// Call once during server startup after the DB is reachable.
+func InitEmbeddingModelCheck(ctx context.Context, q *db.Queries) {
+	stored, err := q.GetSystemConfig(ctx, embeddingModelConfigKey)
+	if err != nil {
+		// No row yet — first run. Record the current model as the baseline.
+		_ = q.UpsertSystemConfig(ctx, db.UpsertSystemConfigParams{
+			Key:   embeddingModelConfigKey,
+			Value: CurrentEmbeddingModel(),
+		})
+		return
+	}
+	embeddingModelStale.Store(stored != CurrentEmbeddingModel())
+}
+
+// IsEmbeddingModelStale returns true when the embedding model has changed
+// since embeddings were last generated, meaning old vectors are incompatible.
+func IsEmbeddingModelStale() bool {
+	return embeddingModelStale.Load()
+}
+
+// RebuildWorkspaceEmbeddings nullifies all embeddings for the workspace and
+// re-generates them in batches using the current embedding model. Runs
+// synchronously; call from a goroutine if the caller is an HTTP handler.
+// Updates system_config.embedding_model and clears the stale flag when done.
+func RebuildWorkspaceEmbeddings(ctx context.Context, q *db.Queries, workspaceID pgtype.UUID) error {
+	if err := q.NullifyWorkspaceEmbeddings(ctx, workspaceID); err != nil {
+		return fmt.Errorf("nullify embeddings: %w", err)
+	}
+
+	var offset int32
+	for {
+		batch, err := q.ListMemoriesNeedingEmbedding(ctx, db.ListMemoriesNeedingEmbeddingParams{
+			WorkspaceID: workspaceID,
+			Limit:       rebuildBatchSize,
+			Offset:      offset,
+		})
+		if err != nil || len(batch) == 0 {
+			break
+		}
+		for _, m := range batch {
+			vec := Embed(ctx, m.Content)
+			if vec == nil {
+				continue
+			}
+			_ = q.SetAgentMemoryEmbedding(ctx, db.SetAgentMemoryEmbeddingParams{
+				ID:        m.ID,
+				Embedding: pgvector.NewVector(vec),
+			})
+		}
+		offset += int32(len(batch))
+		if len(batch) < rebuildBatchSize {
+			break
+		}
+		time.Sleep(50 * time.Millisecond)
+	}
+
+	// Record the new model as current and clear the stale flag.
+	_ = q.UpsertSystemConfig(ctx, db.UpsertSystemConfigParams{
+		Key:   embeddingModelConfigKey,
+		Value: CurrentEmbeddingModel(),
+	})
+	embeddingModelStale.Store(false)
+	return nil
+}
 
 // embedConfig is resolved from environment variables, mirroring the pattern
 // used by resolveSynthesisConfig so operators configure both with the same

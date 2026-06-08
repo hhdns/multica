@@ -129,7 +129,7 @@ export function PersonaTab({ agent, canEdit }: PersonaTabProps) {
         backendConfigured={personaSynthesisBackend !== ""}
       />
       {persona.recent_signals.length > 0 && <SignalsSection persona={persona} />}
-      <MemoriesSection agentId={agent.id} />
+      <MemoriesSection agentId={agent.id} workspaceId={agent.workspace_id} canEdit={canEdit} />
     </div>
   );
 }
@@ -490,8 +490,17 @@ const SENTIMENT_LABELS: Record<string, string> = {
   neutral: "·",
 };
 
-function MemoriesSection({ agentId }: { agentId: string }) {
+function MemoriesSection({
+  agentId,
+  workspaceId,
+  canEdit,
+}: {
+  agentId: string;
+  workspaceId: string;
+  canEdit: boolean;
+}) {
   const [open, setOpen] = useState(false);
+  const embeddingModelStale = useConfigStore((s) => s.embeddingModelStale);
 
   const { data: memories, isLoading } = useQuery({
     queryKey: ["agent-memories", agentId],
@@ -499,8 +508,34 @@ function MemoriesSection({ agentId }: { agentId: string }) {
     enabled: open,
   });
 
+  const rebuild = useMutation({
+    mutationFn: () => api.rebuildWorkspaceEmbeddings(workspaceId),
+  });
+
   return (
     <div className="flex flex-col gap-2 pb-4">
+      {embeddingModelStale && canEdit && (
+        <div className="flex items-center justify-between gap-3 rounded-lg border border-amber-200 bg-amber-50 px-3 py-2.5 text-xs dark:border-amber-900/50 dark:bg-amber-950/30">
+          <span className="text-amber-800 dark:text-amber-300">
+            Embedding model changed — existing memory vectors are stale. Semantic recall will be inaccurate until embeddings are rebuilt.
+          </span>
+          <Button
+            size="sm"
+            variant="outline"
+            className="shrink-0 border-amber-300 text-amber-800 hover:bg-amber-100 dark:border-amber-700 dark:text-amber-300 dark:hover:bg-amber-900/40"
+            disabled={rebuild.isPending || rebuild.isSuccess}
+            onClick={() => rebuild.mutate()}
+          >
+            {rebuild.isPending ? (
+              <><Loader2 className="mr-1.5 h-3 w-3 animate-spin" />Rebuilding…</>
+            ) : rebuild.isSuccess ? (
+              "Started"
+            ) : (
+              "Rebuild"
+            )}
+          </Button>
+        </div>
+      )}
       <button
         className="flex items-center gap-2 text-xs font-semibold uppercase tracking-wide text-muted-foreground hover:text-foreground"
         onClick={() => setOpen((v) => !v)}

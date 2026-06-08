@@ -901,6 +901,12 @@ export class ApiClient {
     return this.fetch(`/api/agents/${id}/memories`);
   }
 
+  async rebuildWorkspaceEmbeddings(wsId: string): Promise<{ status: string }> {
+    return this.fetch(`/api/workspaces/${wsId}/memories/rebuild-embeddings`, {
+      method: "POST",
+    });
+  }
+
   async restoreAgent(id: string): Promise<Agent> {
     return this.fetch(`/api/agents/${id}/restore`, { method: "POST" });
   }
