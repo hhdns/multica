@@ -2,8 +2,9 @@
 INSERT INTO agent_memory (
     agent_id, workspace_id, content, category, sentiment,
     source_issue_id, source_task_id, importance,
-    emotional_valence, emotional_intensity
-) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
+    emotional_valence, emotional_intensity,
+    is_consolidated, source_count
+) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)
 RETURNING *;
 
 -- name: SetAgentMemoryEmbedding :exec
@@ -55,6 +56,23 @@ LIMIT $3;
 
 -- name: CountAgentMemories :one
 SELECT COUNT(*) FROM agent_memory WHERE agent_id = $1;
+
+-- name: ListEmbeddedMemories :many
+-- Returns all memories with embeddings for a given agent, used by the
+-- compaction pass to find clusters of similar episodes.
+SELECT id, content, category, sentiment, importance,
+       emotional_valence, emotional_intensity, embedding, created_at
+FROM agent_memory
+WHERE agent_id = $1
+  AND embedding IS NOT NULL
+  AND is_consolidated = false
+  AND category IN ('task_outcome', 'user_feedback')
+ORDER BY created_at DESC
+LIMIT $2;
+
+-- name: DeleteMemoriesByIDs :exec
+-- Bulk-delete memories by ID, used after compaction to remove merged episodes.
+DELETE FROM agent_memory WHERE id = ANY($1::uuid[]);
 
 -- name: ListMemoriesForIssue :many
 -- Returns recent memories for a specific agent + issue pair, newest first.

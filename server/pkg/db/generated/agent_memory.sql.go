@@ -41,8 +41,9 @@ const createAgentMemory = `-- name: CreateAgentMemory :one
 INSERT INTO agent_memory (
     agent_id, workspace_id, content, category, sentiment,
     source_issue_id, source_task_id, importance,
-    emotional_valence, emotional_intensity
-) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
+    emotional_valence, emotional_intensity,
+    is_consolidated, source_count
+) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)
 RETURNING id, agent_id, workspace_id, content, category, sentiment, source_issue_id, source_task_id, embedding, importance, created_at, emotional_valence, emotional_intensity, access_count, last_accessed_at, is_consolidated, source_count
 `
 
@@ -57,6 +58,8 @@ type CreateAgentMemoryParams struct {
 	Importance         float32     `json:"importance"`
 	EmotionalValence   float32     `json:"emotional_valence"`
 	EmotionalIntensity float32     `json:"emotional_intensity"`
+	IsConsolidated     bool        `json:"is_consolidated"`
+	SourceCount        int32       `json:"source_count"`
 }
 
 func (q *Queries) CreateAgentMemory(ctx context.Context, arg CreateAgentMemoryParams) (AgentMemory, error) {
@@ -71,6 +74,8 @@ func (q *Queries) CreateAgentMemory(ctx context.Context, arg CreateAgentMemoryPa
 		arg.Importance,
 		arg.EmotionalValence,
 		arg.EmotionalIntensity,
+		arg.IsConsolidated,
+		arg.SourceCount,
 	)
 	var i AgentMemory
 	err := row.Scan(
@@ -93,6 +98,16 @@ func (q *Queries) CreateAgentMemory(ctx context.Context, arg CreateAgentMemoryPa
 		&i.SourceCount,
 	)
 	return i, err
+}
+
+const deleteMemoriesByIDs = `-- name: DeleteMemoriesByIDs :exec
+DELETE FROM agent_memory WHERE id = ANY($1::uuid[])
+`
+
+// Bulk-delete memories by ID, used after compaction to remove merged episodes.
+func (q *Queries) DeleteMemoriesByIDs(ctx context.Context, dollar_1 []pgtype.UUID) error {
+	_, err := q.db.Exec(ctx, deleteMemoriesByIDs, dollar_1)
+	return err
 }
 
 const deleteOldAgentMemories = `-- name: DeleteOldAgentMemories :exec
@@ -168,6 +183,67 @@ func (q *Queries) ListAgentMemories(ctx context.Context, arg ListAgentMemoriesPa
 			&i.LastAccessedAt,
 			&i.IsConsolidated,
 			&i.SourceCount,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const listEmbeddedMemories = `-- name: ListEmbeddedMemories :many
+SELECT id, content, category, sentiment, importance,
+       emotional_valence, emotional_intensity, embedding, created_at
+FROM agent_memory
+WHERE agent_id = $1
+  AND embedding IS NOT NULL
+  AND is_consolidated = false
+  AND category IN ('task_outcome', 'user_feedback')
+ORDER BY created_at DESC
+LIMIT $2
+`
+
+type ListEmbeddedMemoriesParams struct {
+	AgentID pgtype.UUID `json:"agent_id"`
+	Limit   int32       `json:"limit"`
+}
+
+type ListEmbeddedMemoriesRow struct {
+	ID                 pgtype.UUID        `json:"id"`
+	Content            string             `json:"content"`
+	Category           string             `json:"category"`
+	Sentiment          string             `json:"sentiment"`
+	Importance         float32            `json:"importance"`
+	EmotionalValence   float32            `json:"emotional_valence"`
+	EmotionalIntensity float32            `json:"emotional_intensity"`
+	Embedding          pgvector.Vector    `json:"embedding"`
+	CreatedAt          pgtype.Timestamptz `json:"created_at"`
+}
+
+// Returns all memories with embeddings for a given agent, used by the
+// compaction pass to find clusters of similar episodes.
+func (q *Queries) ListEmbeddedMemories(ctx context.Context, arg ListEmbeddedMemoriesParams) ([]ListEmbeddedMemoriesRow, error) {
+	rows, err := q.db.Query(ctx, listEmbeddedMemories, arg.AgentID, arg.Limit)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []ListEmbeddedMemoriesRow{}
+	for rows.Next() {
+		var i ListEmbeddedMemoriesRow
+		if err := rows.Scan(
+			&i.ID,
+			&i.Content,
+			&i.Category,
+			&i.Sentiment,
+			&i.Importance,
+			&i.EmotionalValence,
+			&i.EmotionalIntensity,
+			&i.Embedding,
+			&i.CreatedAt,
 		); err != nil {
 			return nil, err
 		}

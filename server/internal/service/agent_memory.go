@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"io"
 	"log/slog"
+	"math"
 	"net/http"
 	"os"
 	"strings"
@@ -183,6 +184,11 @@ func RecordTaskMemory(
 			slog.Warn("agent_memory: set embedding failed", "error", err, "memory_id", mem.ID)
 		}
 	}
+
+	// Compact similar episodic memories into consolidated skill_learned entries
+	// when approaching the retention cap. Runs before pruning so the pruner
+	// operates on a richer, more diverse pool.
+	MaybeCompactMemories(ctx, q, agentID, workspaceID)
 
 	// Prune old memories to stay within the retention cap.
 	if err := q.DeleteOldAgentMemories(ctx, db.DeleteOldAgentMemoriesParams{
@@ -369,6 +375,204 @@ func clamp32(v, lo, hi float32) float32 {
 		return hi
 	}
 	return v
+}
+
+// compactionThresholdRatio is the fraction of memoryRetentionLimit at which
+// compaction is considered. Set to 0.80 so compaction runs before the cap
+// is hit, giving the pruner a richer pool to work with.
+const compactionThresholdRatio = 0.80
+
+// compactionMinClusterSize is the minimum number of similar memories required
+// to trigger a merge. Below this the overhead isn't worth it.
+const compactionMinClusterSize = 3
+
+// compactionSimilarityThreshold is the cosine similarity above which two
+// memories are considered part of the same cluster.
+const compactionSimilarityThreshold = float64(0.82)
+
+// MaybeCompactMemories checks whether the agent's memory is approaching the
+// retention limit and, if so, clusters similar episodes and merges each
+// qualifying cluster into a single consolidated skill_learned memory.
+//
+// Compaction only runs when a synthesis backend is configured (it requires
+// an LLM call to generate the merged text). Safe to call in a goroutine.
+func MaybeCompactMemories(ctx context.Context, q *db.Queries, agentID, workspaceID pgtype.UUID) {
+	total, err := q.CountAgentMemories(ctx, agentID)
+	if err != nil {
+		return
+	}
+	threshold := int64(float64(memoryRetentionLimit) * compactionThresholdRatio)
+	if total < threshold {
+		return
+	}
+
+	cfg := resolveSynthesisConfig()
+	if cfg.backend == "" {
+		return // LLM required for synthesis — skip silently
+	}
+
+	// Fetch all embedded, non-consolidated episodic memories (cap at 150 to
+	// keep the in-memory clustering cheap).
+	mems, err := q.ListEmbeddedMemories(ctx, db.ListEmbeddedMemoriesParams{
+		AgentID: agentID,
+		Limit:   150,
+	})
+	if err != nil || len(mems) < compactionMinClusterSize {
+		return
+	}
+
+	clusters := clusterByEmbedding(mems)
+	for _, cluster := range clusters {
+		if len(cluster) < compactionMinClusterSize {
+			continue
+		}
+		mergeMemoryCluster(ctx, q, cfg, agentID, workspaceID, cluster)
+	}
+}
+
+// clusterByEmbedding groups memories by cosine similarity. Uses a simple
+// greedy O(n²) approach — acceptable for ≤150 memories.
+func clusterByEmbedding(mems []db.ListEmbeddedMemoriesRow) [][]db.ListEmbeddedMemoriesRow {
+	assigned := make([]bool, len(mems))
+	var clusters [][]db.ListEmbeddedMemoriesRow
+
+	for i := range mems {
+		if assigned[i] {
+			continue
+		}
+		cluster := []db.ListEmbeddedMemoriesRow{mems[i]}
+		assigned[i] = true
+		vecI := mems[i].Embedding.Slice()
+		for j := i + 1; j < len(mems); j++ {
+			if assigned[j] {
+				continue
+			}
+			if cosineSimilarity(vecI, mems[j].Embedding.Slice()) >= compactionSimilarityThreshold {
+				cluster = append(cluster, mems[j])
+				assigned[j] = true
+			}
+		}
+		clusters = append(clusters, cluster)
+	}
+	return clusters
+}
+
+// cosineSimilarity computes the cosine similarity between two float32 slices.
+// Returns 0 for zero-length or mismatched slices.
+func cosineSimilarity(a, b []float32) float64 {
+	if len(a) != len(b) || len(a) == 0 {
+		return 0
+	}
+	var dot, normA, normB float64
+	for i := range a {
+		dot += float64(a[i]) * float64(b[i])
+		normA += float64(a[i]) * float64(a[i])
+		normB += float64(b[i]) * float64(b[i])
+	}
+	if normA == 0 || normB == 0 {
+		return 0
+	}
+	return dot / (math.Sqrt(normA) * math.Sqrt(normB))
+}
+
+// mergeMemoryCluster calls the LLM to synthesise a cluster of similar episodic
+// memories into a single consolidated skill_learned memory, then deletes the
+// originals.
+func mergeMemoryCluster(
+	ctx context.Context,
+	q *db.Queries,
+	cfg synthesisConfig,
+	agentID, workspaceID pgtype.UUID,
+	cluster []db.ListEmbeddedMemoriesRow,
+) {
+	// Build the synthesis prompt from cluster contents.
+	var sb strings.Builder
+	sb.WriteString("You are consolidating an AI agent's episodic memories into a single lasting insight.\n\n")
+	sb.WriteString("These memories describe similar experiences:\n")
+	for i, m := range cluster {
+		fmt.Fprintf(&sb, "%d. %s\n", i+1, m.Content)
+	}
+	sb.WriteString(`
+Synthesise these into ONE concise sentence or two that captures:
+- what the agent has learned or become good at (skill or pattern)
+- any recurring challenge or blind spot if present
+
+Write in the agent's first person. Be specific, not generic.
+Output only the synthesised text, no preamble.`)
+
+	var (
+		raw string
+		err error
+	)
+	switch cfg.backend {
+	case "anthropic":
+		raw, err = callAnthropic(ctx, cfg, sb.String(), 200)
+	case "openai":
+		raw, err = callOpenAICompat(ctx, cfg, sb.String(), 200)
+	}
+	if err != nil || strings.TrimSpace(raw) == "" {
+		slog.Debug("agent_memory: compaction synthesis failed", "error", err, "cluster_size", len(cluster))
+		return
+	}
+
+	// Importance = max of cluster × 1.1 (capped at 1.0). Emotional fields are
+	// averaged across the cluster so the consolidated memory carries the
+	// emotional character of its sources.
+	maxImportance := float32(0)
+	var totalValence, totalIntensity float32
+	for _, m := range cluster {
+		if m.Importance > maxImportance {
+			maxImportance = m.Importance
+		}
+		totalValence += m.EmotionalValence
+		totalIntensity += m.EmotionalIntensity
+	}
+	n := float32(len(cluster))
+	sentiment := "neutral"
+	avgValence := totalValence / n
+	if avgValence > 0.2 {
+		sentiment = "positive"
+	} else if avgValence < -0.2 {
+		sentiment = "negative"
+	}
+
+	content := strings.TrimSpace(raw)
+	mem, err := q.CreateAgentMemory(ctx, db.CreateAgentMemoryParams{
+		AgentID:            agentID,
+		WorkspaceID:        workspaceID,
+		Content:            content,
+		Category:           "skill_learned",
+		Sentiment:          sentiment,
+		Importance:         clamp32(maxImportance*1.1, 0, 1.0),
+		EmotionalValence:   clamp32(avgValence, -1, 1),
+		EmotionalIntensity: clamp32(totalIntensity/n, 0, 1),
+		IsConsolidated:     true,
+		SourceCount:        int32(len(cluster)),
+	})
+	if err != nil {
+		slog.Warn("agent_memory: create consolidated memory failed", "error", err)
+		return
+	}
+
+	// Embed the consolidated memory so it participates in future recall.
+	if vec := Embed(ctx, content); vec != nil {
+		_ = q.SetAgentMemoryEmbedding(ctx, db.SetAgentMemoryEmbeddingParams{
+			ID:        mem.ID,
+			Embedding: pgvector.NewVector(vec),
+		})
+	}
+
+	// Delete the source episodes now that they are merged.
+	ids := make([]pgtype.UUID, len(cluster))
+	for i, m := range cluster {
+		ids[i] = m.ID
+	}
+	if err := q.DeleteMemoriesByIDs(ctx, ids); err != nil {
+		slog.Warn("agent_memory: delete merged episodes failed", "error", err, "count", len(ids))
+	}
+
+	slog.Info("agent_memory: compacted cluster",
+		"agent_id", agentID, "cluster_size", len(cluster), "memory_id", mem.ID)
 }
 
 // emotionalImpressionThreshold is the minimum signal weight that triggers an
