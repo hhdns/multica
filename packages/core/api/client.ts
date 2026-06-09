@@ -897,6 +897,20 @@ export class ApiClient {
     });
   }
 
+  async exportAgentPersona(id: string): Promise<Blob> {
+    const res = await this.fetchRaw(`/api/agents/${id}/persona/export`);
+    return res.blob();
+  }
+
+  async importAgentPersona(id: string, file: File): Promise<{ memories_imported: number; memories_skipped: number }> {
+    const text = await file.text();
+    return this.fetch(`/api/agents/${id}/persona/import`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: text,
+    });
+  }
+
   async listAgentMemories(id: string): Promise<import("../types").AgentMemory[]> {
     return this.fetch(`/api/agents/${id}/memories`);
   }

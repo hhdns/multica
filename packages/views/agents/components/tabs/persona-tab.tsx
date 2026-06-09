@@ -1,7 +1,7 @@
 "use client";
 
 import { useCallback, useState } from "react";
-import { Loader2, Save, Sparkles, ThumbsUp, ThumbsDown, Plus, X, Wand2, Brain, ChevronDown, ChevronRight, Cpu, UserRound } from "lucide-react";
+import { Loader2, Save, Sparkles, ThumbsUp, ThumbsDown, Plus, X, Wand2, Brain, ChevronDown, ChevronRight, Cpu, UserRound, Download, Upload } from "lucide-react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import type { Agent, AgentPersona, AgentMemory, PersonaLLMCall, UpdateAgentPersonaRequest } from "@multica/core/types";
 import { api } from "@multica/core/api";
@@ -93,6 +93,35 @@ export function PersonaTab({ agent, canEdit }: PersonaTabProps) {
 
   const personaSynthesisBackend = useConfigStore((s) => s.personaSynthesisBackend);
 
+  const [importing, setImporting] = useState(false);
+  const [importResult, setImportResult] = useState<{ imported: number; skipped: number } | null>(null);
+
+  const handleExport = async () => {
+    const blob = await api.exportAgentPersona(agent.id);
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = `${agent.name.replace(/\s+/g, "-")}-persona.json`;
+    a.click();
+    URL.revokeObjectURL(url);
+  };
+
+  const handleImport = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    e.target.value = "";
+    setImporting(true);
+    setImportResult(null);
+    try {
+      const result = await api.importAgentPersona(agent.id, file);
+      setImportResult({ imported: result.memories_imported, skipped: result.memories_skipped });
+      qc.invalidateQueries({ queryKey: ["agent-memories", agent.id] });
+      qc.invalidateQueries({ queryKey });
+    } finally {
+      setImporting(false);
+    }
+  };
+
   const [synthesisError, setSynthesisError] = useState<string | null>(null);
   const synthesize = useMutation({
     mutationFn: () => api.synthesizeAgentPersona(agent.id),
@@ -115,6 +144,24 @@ export function PersonaTab({ agent, canEdit }: PersonaTabProps) {
 
   return (
     <div className="flex h-full flex-col gap-6 overflow-y-auto py-1 pr-1">
+      <div className="flex items-center justify-end gap-2">
+        {importResult && (
+          <span className="mr-auto text-[11px] text-muted-foreground">
+            Imported {importResult.imported} memories{importResult.skipped > 0 ? `, skipped ${importResult.skipped} duplicates` : ""}.
+          </span>
+        )}
+        <Button size="sm" variant="ghost" className="h-7 gap-1.5 text-xs" onClick={handleExport}>
+          <Download className="h-3.5 w-3.5" />
+          Export
+        </Button>
+        {canEdit && (
+          <label className="inline-flex h-7 cursor-pointer items-center gap-1.5 rounded-md px-2 text-xs font-medium text-muted-foreground transition-colors hover:bg-accent hover:text-accent-foreground">
+            {importing ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Upload className="h-3.5 w-3.5" />}
+            Import
+            <input type="file" accept=".json" className="hidden" disabled={importing} onChange={handleImport} />
+          </label>
+        )}
+      </div>
       <MoodSection persona={persona} />
       <TraitsSection persona={persona} canEdit={canEdit} onSave={(data) => mutation.mutate(data)} saving={mutation.isPending} />
       <StrengthsSection persona={persona} canEdit={canEdit} onSave={(data) => mutation.mutate(data)} />
