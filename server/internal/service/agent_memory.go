@@ -62,7 +62,8 @@ var embeddingLastRebuiltAt atomic.Pointer[time.Time]
 const embeddingLastRebuiltAtKey = "embedding_last_rebuilt_at"
 
 // CurrentEmbeddingModel returns the embedding model name from env, defaulting
-// to bge-m3 — the same default used by resolveEmbedConfig.
+// to bge-m3 — the same default used by the self-hosted embeddings container
+// in docker-compose.selfhost.yml.
 func CurrentEmbeddingModel() string {
 	if m := os.Getenv("PERSONA_EMBEDDING_MODEL"); m != "" {
 		return m
@@ -196,7 +197,7 @@ func resolveEmbedConfig() embedConfig {
 	// embedding model at a different port or host).
 	if base := os.Getenv("PERSONA_EMBEDDING_BASE_URL"); base != "" {
 		if model == "" {
-			model = "text-embedding-3-small"
+			model = "bge-m3"
 		}
 		apiKey := os.Getenv("PERSONA_EMBEDDING_API_KEY")
 		if apiKey == "" {

@@ -123,7 +123,7 @@ services:
       # takes priority; falls back to PERSONA_SYNTHESIS_BASE_URL if unset.
       # When running --profile embeddings, set:
       #   PERSONA_EMBEDDING_BASE_URL=http://embeddings:11434/v1
-      #   PERSONA_EMBEDDING_MODEL=nomic-embed-text
+      #   PERSONA_EMBEDDING_MODEL=bge-m3
       PERSONA_EMBEDDING_BASE_URL: ${PERSONA_EMBEDDING_BASE_URL:-}
       PERSONA_EMBEDDING_API_KEY: ${PERSONA_EMBEDDING_API_KEY:-}
       PERSONA_EMBEDDING_MODEL: ${PERSONA_EMBEDDING_MODEL:-}
@@ -145,7 +145,7 @@ services:
   # Start with: docker compose -f docker-compose.selfhost.yml --profile embeddings up -d
   # Then add to .env:
   #   PERSONA_EMBEDDING_BASE_URL=http://embeddings:11434/v1
-  #   PERSONA_EMBEDDING_MODEL=nomic-embed-text
+  #   PERSONA_EMBEDDING_MODEL=bge-m3
   embeddings:
     image: ollama/ollama:latest
     profiles: ["embeddings"]
@@ -157,7 +157,7 @@ services:
         ollama pull $${PERSONA_EMBEDDING_MODEL:-bge-m3}
         wait
     environment:
-      PERSONA_EMBEDDING_MODEL: ${PERSONA_EMBEDDING_MODEL:-nomic-embed-text}
+      PERSONA_EMBEDDING_MODEL: ${PERSONA_EMBEDDING_MODEL:-bge-m3}
       OLLAMA_NUM_PARALLEL: ${OLLAMA_NUM_PARALLEL:-4}
       OLLAMA_MAX_QUEUE: ${OLLAMA_MAX_QUEUE:-16}
     volumes:
