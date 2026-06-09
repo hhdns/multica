@@ -205,3 +205,32 @@ UPDATE chat_session SET last_episode_at = now() WHERE id = $1;
 -- Returns the fields needed to decide whether to generate an episode at
 -- claim time: the session's last-activity and last-episode timestamps.
 SELECT last_episode_at, updated_at FROM chat_session WHERE id = $1;
+
+-- name: CreateGroupChatSession :one
+INSERT INTO chat_session (workspace_id, agent_id, creator_id, title, runtime_id, is_group, routing_mode)
+VALUES ($1, $2, $3, $4, (SELECT runtime_id FROM agent WHERE id = $2), true, $5)
+RETURNING *;
+
+-- name: AddChatSessionParticipants :exec
+INSERT INTO chat_session_participant (chat_session_id, agent_id)
+SELECT @chat_session_id, unnest(@agent_ids::uuid[])
+ON CONFLICT DO NOTHING;
+
+-- name: GetChatSessionParticipants :many
+SELECT agent_id FROM chat_session_participant
+WHERE chat_session_id = $1
+ORDER BY joined_at ASC;
+
+-- name: GetLastAssistantAgentInSession :one
+-- Used by relay routing: find the agent_id of the most recent assistant message.
+SELECT agent_id FROM chat_message
+WHERE chat_session_id = $1
+  AND role = 'assistant'
+  AND agent_id IS NOT NULL
+ORDER BY created_at DESC
+LIMIT 1;
+
+-- name: CreateChatMessageWithAgent :one
+INSERT INTO chat_message (chat_session_id, role, content, task_id, agent_id, failure_reason, elapsed_ms)
+VALUES ($1, $2, $3, sqlc.narg(task_id), sqlc.narg(agent_id), sqlc.narg(failure_reason), sqlc.narg(elapsed_ms))
+RETURNING *;

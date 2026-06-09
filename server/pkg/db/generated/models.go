@@ -244,6 +244,7 @@ type ChatMessage struct {
 	CreatedAt     pgtype.Timestamptz `json:"created_at"`
 	FailureReason pgtype.Text        `json:"failure_reason"`
 	ElapsedMs     pgtype.Int8        `json:"elapsed_ms"`
+	AgentID       pgtype.UUID        `json:"agent_id"`
 }
 
 type ChatSession struct {
@@ -260,6 +261,14 @@ type ChatSession struct {
 	UnreadSince   pgtype.Timestamptz `json:"unread_since"`
 	RuntimeID     pgtype.UUID        `json:"runtime_id"`
 	LastEpisodeAt pgtype.Timestamptz `json:"last_episode_at"`
+	IsGroup       bool               `json:"is_group"`
+	RoutingMode   pgtype.Text        `json:"routing_mode"`
+}
+
+type ChatSessionParticipant struct {
+	ChatSessionID pgtype.UUID        `json:"chat_session_id"`
+	AgentID       pgtype.UUID        `json:"agent_id"`
+	JoinedAt      pgtype.Timestamptz `json:"joined_at"`
 }
 
 type Comment struct {

@@ -11,10 +11,26 @@ import (
 	"github.com/jackc/pgx/v5/pgtype"
 )
 
+const addChatSessionParticipants = `-- name: AddChatSessionParticipants :exec
+INSERT INTO chat_session_participant (chat_session_id, agent_id)
+SELECT $1, unnest($2::uuid[])
+ON CONFLICT DO NOTHING
+`
+
+type AddChatSessionParticipantsParams struct {
+	ChatSessionID pgtype.UUID   `json:"chat_session_id"`
+	AgentIds      []pgtype.UUID `json:"agent_ids"`
+}
+
+func (q *Queries) AddChatSessionParticipants(ctx context.Context, arg AddChatSessionParticipantsParams) error {
+	_, err := q.db.Exec(ctx, addChatSessionParticipants, arg.ChatSessionID, arg.AgentIds)
+	return err
+}
+
 const createChatMessage = `-- name: CreateChatMessage :one
 INSERT INTO chat_message (chat_session_id, role, content, task_id, failure_reason, elapsed_ms)
 VALUES ($1, $2, $3, $4, $5, $6)
-RETURNING id, chat_session_id, role, content, task_id, created_at, failure_reason, elapsed_ms
+RETURNING id, chat_session_id, role, content, task_id, created_at, failure_reason, elapsed_ms, agent_id
 `
 
 type CreateChatMessageParams struct {
@@ -45,6 +61,48 @@ func (q *Queries) CreateChatMessage(ctx context.Context, arg CreateChatMessagePa
 		&i.CreatedAt,
 		&i.FailureReason,
 		&i.ElapsedMs,
+		&i.AgentID,
+	)
+	return i, err
+}
+
+const createChatMessageWithAgent = `-- name: CreateChatMessageWithAgent :one
+INSERT INTO chat_message (chat_session_id, role, content, task_id, agent_id, failure_reason, elapsed_ms)
+VALUES ($1, $2, $3, $4, $5, $6, $7)
+RETURNING id, chat_session_id, role, content, task_id, created_at, failure_reason, elapsed_ms, agent_id
+`
+
+type CreateChatMessageWithAgentParams struct {
+	ChatSessionID pgtype.UUID `json:"chat_session_id"`
+	Role          string      `json:"role"`
+	Content       string      `json:"content"`
+	TaskID        pgtype.UUID `json:"task_id"`
+	AgentID       pgtype.UUID `json:"agent_id"`
+	FailureReason pgtype.Text `json:"failure_reason"`
+	ElapsedMs     pgtype.Int8 `json:"elapsed_ms"`
+}
+
+func (q *Queries) CreateChatMessageWithAgent(ctx context.Context, arg CreateChatMessageWithAgentParams) (ChatMessage, error) {
+	row := q.db.QueryRow(ctx, createChatMessageWithAgent,
+		arg.ChatSessionID,
+		arg.Role,
+		arg.Content,
+		arg.TaskID,
+		arg.AgentID,
+		arg.FailureReason,
+		arg.ElapsedMs,
+	)
+	var i ChatMessage
+	err := row.Scan(
+		&i.ID,
+		&i.ChatSessionID,
+		&i.Role,
+		&i.Content,
+		&i.TaskID,
+		&i.CreatedAt,
+		&i.FailureReason,
+		&i.ElapsedMs,
+		&i.AgentID,
 	)
 	return i, err
 }
@@ -52,7 +110,7 @@ func (q *Queries) CreateChatMessage(ctx context.Context, arg CreateChatMessagePa
 const createChatSession = `-- name: CreateChatSession :one
 INSERT INTO chat_session (workspace_id, agent_id, creator_id, title, runtime_id)
 VALUES ($1, $2, $3, $4, (SELECT runtime_id FROM agent WHERE id = $2))
-RETURNING id, workspace_id, agent_id, creator_id, title, session_id, work_dir, status, created_at, updated_at, unread_since, runtime_id, last_episode_at
+RETURNING id, workspace_id, agent_id, creator_id, title, session_id, work_dir, status, created_at, updated_at, unread_since, runtime_id, last_episode_at, is_group, routing_mode
 `
 
 type CreateChatSessionParams struct {
@@ -84,6 +142,8 @@ func (q *Queries) CreateChatSession(ctx context.Context, arg CreateChatSessionPa
 		&i.UnreadSince,
 		&i.RuntimeID,
 		&i.LastEpisodeAt,
+		&i.IsGroup,
+		&i.RoutingMode,
 	)
 	return i, err
 }
@@ -143,6 +203,49 @@ func (q *Queries) CreateChatTask(ctx context.Context, arg CreateChatTaskParams) 
 	return i, err
 }
 
+const createGroupChatSession = `-- name: CreateGroupChatSession :one
+INSERT INTO chat_session (workspace_id, agent_id, creator_id, title, runtime_id, is_group, routing_mode)
+VALUES ($1, $2, $3, $4, (SELECT runtime_id FROM agent WHERE id = $2), true, $5)
+RETURNING id, workspace_id, agent_id, creator_id, title, session_id, work_dir, status, created_at, updated_at, unread_since, runtime_id, last_episode_at, is_group, routing_mode
+`
+
+type CreateGroupChatSessionParams struct {
+	WorkspaceID pgtype.UUID `json:"workspace_id"`
+	AgentID     pgtype.UUID `json:"agent_id"`
+	CreatorID   pgtype.UUID `json:"creator_id"`
+	Title       string      `json:"title"`
+	RoutingMode pgtype.Text `json:"routing_mode"`
+}
+
+func (q *Queries) CreateGroupChatSession(ctx context.Context, arg CreateGroupChatSessionParams) (ChatSession, error) {
+	row := q.db.QueryRow(ctx, createGroupChatSession,
+		arg.WorkspaceID,
+		arg.AgentID,
+		arg.CreatorID,
+		arg.Title,
+		arg.RoutingMode,
+	)
+	var i ChatSession
+	err := row.Scan(
+		&i.ID,
+		&i.WorkspaceID,
+		&i.AgentID,
+		&i.CreatorID,
+		&i.Title,
+		&i.SessionID,
+		&i.WorkDir,
+		&i.Status,
+		&i.CreatedAt,
+		&i.UpdatedAt,
+		&i.UnreadSince,
+		&i.RuntimeID,
+		&i.LastEpisodeAt,
+		&i.IsGroup,
+		&i.RoutingMode,
+	)
+	return i, err
+}
+
 const deleteChatSession = `-- name: DeleteChatSession :exec
 DELETE FROM chat_session WHERE id = $1 AND workspace_id = $2
 `
@@ -188,7 +291,7 @@ func (q *Queries) DeleteUserChatMessageByTask(ctx context.Context, taskID pgtype
 }
 
 const getChatMessage = `-- name: GetChatMessage :one
-SELECT id, chat_session_id, role, content, task_id, created_at, failure_reason, elapsed_ms FROM chat_message
+SELECT id, chat_session_id, role, content, task_id, created_at, failure_reason, elapsed_ms, agent_id FROM chat_message
 WHERE id = $1
 `
 
@@ -204,12 +307,13 @@ func (q *Queries) GetChatMessage(ctx context.Context, id pgtype.UUID) (ChatMessa
 		&i.CreatedAt,
 		&i.FailureReason,
 		&i.ElapsedMs,
+		&i.AgentID,
 	)
 	return i, err
 }
 
 const getChatSession = `-- name: GetChatSession :one
-SELECT id, workspace_id, agent_id, creator_id, title, session_id, work_dir, status, created_at, updated_at, unread_since, runtime_id, last_episode_at FROM chat_session
+SELECT id, workspace_id, agent_id, creator_id, title, session_id, work_dir, status, created_at, updated_at, unread_since, runtime_id, last_episode_at, is_group, routing_mode FROM chat_session
 WHERE id = $1
 `
 
@@ -230,6 +334,8 @@ func (q *Queries) GetChatSession(ctx context.Context, id pgtype.UUID) (ChatSessi
 		&i.UnreadSince,
 		&i.RuntimeID,
 		&i.LastEpisodeAt,
+		&i.IsGroup,
+		&i.RoutingMode,
 	)
 	return i, err
 }
@@ -253,7 +359,7 @@ func (q *Queries) GetChatSessionEpisodeState(ctx context.Context, id pgtype.UUID
 }
 
 const getChatSessionInWorkspace = `-- name: GetChatSessionInWorkspace :one
-SELECT id, workspace_id, agent_id, creator_id, title, session_id, work_dir, status, created_at, updated_at, unread_since, runtime_id, last_episode_at FROM chat_session
+SELECT id, workspace_id, agent_id, creator_id, title, session_id, work_dir, status, created_at, updated_at, unread_since, runtime_id, last_episode_at, is_group, routing_mode FROM chat_session
 WHERE id = $1 AND workspace_id = $2
 `
 
@@ -279,8 +385,53 @@ func (q *Queries) GetChatSessionInWorkspace(ctx context.Context, arg GetChatSess
 		&i.UnreadSince,
 		&i.RuntimeID,
 		&i.LastEpisodeAt,
+		&i.IsGroup,
+		&i.RoutingMode,
 	)
 	return i, err
+}
+
+const getChatSessionParticipants = `-- name: GetChatSessionParticipants :many
+SELECT agent_id FROM chat_session_participant
+WHERE chat_session_id = $1
+ORDER BY joined_at ASC
+`
+
+func (q *Queries) GetChatSessionParticipants(ctx context.Context, chatSessionID pgtype.UUID) ([]pgtype.UUID, error) {
+	rows, err := q.db.Query(ctx, getChatSessionParticipants, chatSessionID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []pgtype.UUID{}
+	for rows.Next() {
+		var agent_id pgtype.UUID
+		if err := rows.Scan(&agent_id); err != nil {
+			return nil, err
+		}
+		items = append(items, agent_id)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const getLastAssistantAgentInSession = `-- name: GetLastAssistantAgentInSession :one
+SELECT agent_id FROM chat_message
+WHERE chat_session_id = $1
+  AND role = 'assistant'
+  AND agent_id IS NOT NULL
+ORDER BY created_at DESC
+LIMIT 1
+`
+
+// Used by relay routing: find the agent_id of the most recent assistant message.
+func (q *Queries) GetLastAssistantAgentInSession(ctx context.Context, chatSessionID pgtype.UUID) (pgtype.UUID, error) {
+	row := q.db.QueryRow(ctx, getLastAssistantAgentInSession, chatSessionID)
+	var agent_id pgtype.UUID
+	err := row.Scan(&agent_id)
+	return agent_id, err
 }
 
 const getLastChatTaskSession = `-- name: GetLastChatTaskSession :one
@@ -320,7 +471,7 @@ func (q *Queries) GetLastChatTaskSession(ctx context.Context, chatSessionID pgty
 }
 
 const getMostRecentUserChatMessage = `-- name: GetMostRecentUserChatMessage :one
-SELECT id, chat_session_id, role, content, task_id, created_at, failure_reason, elapsed_ms FROM chat_message
+SELECT id, chat_session_id, role, content, task_id, created_at, failure_reason, elapsed_ms, agent_id FROM chat_message
 WHERE chat_session_id = $1 AND role = 'user'
 ORDER BY created_at DESC
 LIMIT 1
@@ -343,6 +494,7 @@ func (q *Queries) GetMostRecentUserChatMessage(ctx context.Context, chatSessionI
 		&i.CreatedAt,
 		&i.FailureReason,
 		&i.ElapsedMs,
+		&i.AgentID,
 	)
 	return i, err
 }
@@ -446,7 +598,7 @@ func (q *Queries) GetRecentAgentChatMessages(ctx context.Context, arg GetRecentA
 }
 
 const listAllChatSessionsByCreator = `-- name: ListAllChatSessionsByCreator :many
-SELECT cs.id, cs.workspace_id, cs.agent_id, cs.creator_id, cs.title, cs.session_id, cs.work_dir, cs.status, cs.created_at, cs.updated_at, cs.unread_since, cs.runtime_id, cs.last_episode_at,
+SELECT cs.id, cs.workspace_id, cs.agent_id, cs.creator_id, cs.title, cs.session_id, cs.work_dir, cs.status, cs.created_at, cs.updated_at, cs.unread_since, cs.runtime_id, cs.last_episode_at, cs.is_group, cs.routing_mode,
        (cs.unread_since IS NOT NULL)::bool AS has_unread
 FROM chat_session cs
 WHERE cs.workspace_id = $1 AND cs.creator_id = $2
@@ -472,6 +624,8 @@ type ListAllChatSessionsByCreatorRow struct {
 	UnreadSince   pgtype.Timestamptz `json:"unread_since"`
 	RuntimeID     pgtype.UUID        `json:"runtime_id"`
 	LastEpisodeAt pgtype.Timestamptz `json:"last_episode_at"`
+	IsGroup       bool               `json:"is_group"`
+	RoutingMode   pgtype.Text        `json:"routing_mode"`
 	HasUnread     bool               `json:"has_unread"`
 }
 
@@ -498,6 +652,8 @@ func (q *Queries) ListAllChatSessionsByCreator(ctx context.Context, arg ListAllC
 			&i.UnreadSince,
 			&i.RuntimeID,
 			&i.LastEpisodeAt,
+			&i.IsGroup,
+			&i.RoutingMode,
 			&i.HasUnread,
 		); err != nil {
 			return nil, err
@@ -511,7 +667,7 @@ func (q *Queries) ListAllChatSessionsByCreator(ctx context.Context, arg ListAllC
 }
 
 const listChatMessages = `-- name: ListChatMessages :many
-SELECT id, chat_session_id, role, content, task_id, created_at, failure_reason, elapsed_ms FROM chat_message
+SELECT id, chat_session_id, role, content, task_id, created_at, failure_reason, elapsed_ms, agent_id FROM chat_message
 WHERE chat_session_id = $1
 ORDER BY created_at ASC
 `
@@ -534,6 +690,7 @@ func (q *Queries) ListChatMessages(ctx context.Context, chatSessionID pgtype.UUI
 			&i.CreatedAt,
 			&i.FailureReason,
 			&i.ElapsedMs,
+			&i.AgentID,
 		); err != nil {
 			return nil, err
 		}
@@ -546,7 +703,7 @@ func (q *Queries) ListChatMessages(ctx context.Context, chatSessionID pgtype.UUI
 }
 
 const listChatMessagesPage = `-- name: ListChatMessagesPage :many
-SELECT id, chat_session_id, role, content, task_id, created_at, failure_reason, elapsed_ms FROM chat_message
+SELECT id, chat_session_id, role, content, task_id, created_at, failure_reason, elapsed_ms, agent_id FROM chat_message
 WHERE chat_session_id = $1
   AND (
     $3::timestamptz IS NULL
@@ -586,6 +743,7 @@ func (q *Queries) ListChatMessagesPage(ctx context.Context, arg ListChatMessages
 			&i.CreatedAt,
 			&i.FailureReason,
 			&i.ElapsedMs,
+			&i.AgentID,
 		); err != nil {
 			return nil, err
 		}
@@ -598,7 +756,7 @@ func (q *Queries) ListChatMessagesPage(ctx context.Context, arg ListChatMessages
 }
 
 const listChatSessionsByCreator = `-- name: ListChatSessionsByCreator :many
-SELECT cs.id, cs.workspace_id, cs.agent_id, cs.creator_id, cs.title, cs.session_id, cs.work_dir, cs.status, cs.created_at, cs.updated_at, cs.unread_since, cs.runtime_id, cs.last_episode_at,
+SELECT cs.id, cs.workspace_id, cs.agent_id, cs.creator_id, cs.title, cs.session_id, cs.work_dir, cs.status, cs.created_at, cs.updated_at, cs.unread_since, cs.runtime_id, cs.last_episode_at, cs.is_group, cs.routing_mode,
        (cs.unread_since IS NOT NULL)::bool AS has_unread
 FROM chat_session cs
 WHERE cs.workspace_id = $1 AND cs.creator_id = $2 AND cs.status = 'active'
@@ -624,6 +782,8 @@ type ListChatSessionsByCreatorRow struct {
 	UnreadSince   pgtype.Timestamptz `json:"unread_since"`
 	RuntimeID     pgtype.UUID        `json:"runtime_id"`
 	LastEpisodeAt pgtype.Timestamptz `json:"last_episode_at"`
+	IsGroup       bool               `json:"is_group"`
+	RoutingMode   pgtype.Text        `json:"routing_mode"`
 	HasUnread     bool               `json:"has_unread"`
 }
 
@@ -653,6 +813,8 @@ func (q *Queries) ListChatSessionsByCreator(ctx context.Context, arg ListChatSes
 			&i.UnreadSince,
 			&i.RuntimeID,
 			&i.LastEpisodeAt,
+			&i.IsGroup,
+			&i.RoutingMode,
 			&i.HasUnread,
 		); err != nil {
 			return nil, err
@@ -808,7 +970,7 @@ func (q *Queries) UpdateChatSessionSession(ctx context.Context, arg UpdateChatSe
 const updateChatSessionTitle = `-- name: UpdateChatSessionTitle :one
 UPDATE chat_session SET title = $2, updated_at = now()
 WHERE id = $1
-RETURNING id, workspace_id, agent_id, creator_id, title, session_id, work_dir, status, created_at, updated_at, unread_since, runtime_id, last_episode_at
+RETURNING id, workspace_id, agent_id, creator_id, title, session_id, work_dir, status, created_at, updated_at, unread_since, runtime_id, last_episode_at, is_group, routing_mode
 `
 
 type UpdateChatSessionTitleParams struct {
@@ -833,6 +995,8 @@ func (q *Queries) UpdateChatSessionTitle(ctx context.Context, arg UpdateChatSess
 		&i.UnreadSince,
 		&i.RuntimeID,
 		&i.LastEpisodeAt,
+		&i.IsGroup,
+		&i.RoutingMode,
 	)
 	return i, err
 }
