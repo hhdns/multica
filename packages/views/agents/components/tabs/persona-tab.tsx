@@ -1,7 +1,7 @@
 "use client";
 
 import { useCallback, useState } from "react";
-import { Loader2, Save, Sparkles, ThumbsUp, ThumbsDown, Plus, X, Wand2, Brain, ChevronDown, ChevronRight, Cpu } from "lucide-react";
+import { Loader2, Save, Sparkles, ThumbsUp, ThumbsDown, Plus, X, Wand2, Brain, ChevronDown, ChevronRight, Cpu, UserRound } from "lucide-react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import type { Agent, AgentPersona, AgentMemory, PersonaLLMCall, UpdateAgentPersonaRequest } from "@multica/core/types";
 import { api } from "@multica/core/api";
@@ -501,17 +501,21 @@ function MemoriesSection({
   canEdit: boolean;
 }) {
   const [open, setOpen] = useState(false);
+  const [prefOpen, setPrefOpen] = useState(true);
   const embeddingModelStale = useConfigStore((s) => s.embeddingModelStale);
 
   const { data: memories, isLoading } = useQuery({
     queryKey: ["agent-memories", agentId],
     queryFn: () => api.listAgentMemories(agentId),
-    enabled: open,
+    enabled: open || prefOpen,
   });
 
   const rebuild = useMutation({
     mutationFn: () => api.rebuildWorkspaceEmbeddings(workspaceId),
   });
+
+  const episodicMemories = memories?.filter((m: AgentMemory) => m.category !== "user_preference");
+  const preferenceMemories = memories?.filter((m: AgentMemory) => m.category === "user_preference");
 
   return (
     <div className="flex flex-col gap-2 pb-4">
@@ -552,10 +556,10 @@ function MemoriesSection({
               <Loader2 className="h-4 w-4 animate-spin text-muted-foreground" />
             </div>
           )}
-          {!isLoading && (!memories || memories.length === 0) && (
+          {!isLoading && (!episodicMemories || episodicMemories.length === 0) && (
             <p className="px-3 py-4 text-xs text-muted-foreground">No memories yet. Memories are recorded automatically after tasks complete.</p>
           )}
-          {memories && memories.length > 0 && memories.map((m: AgentMemory) => (
+          {episodicMemories && episodicMemories.length > 0 && episodicMemories.map((m: AgentMemory) => (
             <div key={m.id} className="flex items-start gap-2.5 border-b px-3 py-2.5 last:border-b-0">
               <span className={`mt-0.5 shrink-0 text-xs font-bold ${SENTIMENT_COLORS[m.sentiment]}`}>
                 {SENTIMENT_LABELS[m.sentiment]}
@@ -578,6 +582,33 @@ function MemoriesSection({
             </div>
           ))}
         </div>
+      )}
+      {preferenceMemories && preferenceMemories.length > 0 && (
+        <>
+          <button
+            className="flex items-center gap-2 text-xs font-semibold uppercase tracking-wide text-muted-foreground hover:text-foreground"
+            onClick={() => setPrefOpen((v) => !v)}
+          >
+            <UserRound className="h-3.5 w-3.5" />
+            User Preferences
+            {prefOpen ? <ChevronDown className="ml-auto h-3 w-3" /> : <ChevronRight className="ml-auto h-3 w-3" />}
+          </button>
+          {prefOpen && (
+            <div className="flex flex-col rounded-lg border">
+              {preferenceMemories.map((m: AgentMemory) => (
+                <div key={m.id} className="flex items-start gap-2.5 border-b px-3 py-2.5 last:border-b-0">
+                  <div className="min-w-0 flex-1">
+                    <p className="text-xs text-foreground">{m.content}</p>
+                    <div className="mt-0.5 flex items-center gap-2 text-[10px] text-muted-foreground">
+                      <span>{new Date(m.created_at).toLocaleDateString()}</span>
+                      {m.has_embedding && <span className="rounded bg-muted px-1 py-px font-mono">vec</span>}
+                    </div>
+                  </div>
+                </div>
+              ))}
+            </div>
+          )}
+        </>
       )}
     </div>
   );
