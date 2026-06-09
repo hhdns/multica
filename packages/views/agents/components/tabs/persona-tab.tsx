@@ -152,6 +152,7 @@ export function PersonaTab({ agent, canEdit }: PersonaTabProps) {
       setImportResult({ imported: result.memories_imported, skipped: result.memories_skipped });
       qc.invalidateQueries({ queryKey: ["agent-memories", agent.id] });
       qc.invalidateQueries({ queryKey });
+      qc.invalidateQueries({ queryKey: ["agent-detail-probe", agent.workspace_id, agent.id] });
     } catch (err) {
       setImportError(err instanceof Error ? err.message : "Import failed.");
     } finally {
