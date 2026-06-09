@@ -1310,13 +1310,25 @@ Output only the memory text, no preamble.`,
 	}()
 }
 
-// GetRecentChatContext fetches the last N visible chat messages sent to/from
+// recentChatTokenBudget is the soft token ceiling for the Layer-1 recent-chat
+// block injected into the agent's system prompt. Tokens are estimated at
+// 4 chars per token. Keeping this well below the model's context window leaves
+// room for memories, task context, and tool results.
+const recentChatTokenBudget = 8_000
+
+// recentChatMsgTruncate is the per-message character cap. Long individual
+// messages are still truncated so a single wall-of-text cannot exhaust the
+// entire budget alone.
+const recentChatMsgTruncate = 2_000
+
+// GetRecentChatContext fetches up to `limit` visible chat messages sent to/from
 // the agent across all sessions and formats them as a `## Recent Conversations`
-// block for Layer-1 temporal injection. Newest messages are fetched first,
-// then reversed so the agent reads them chronologically.
+// block for Layer-1 temporal injection.
 //
-// This gives the agent verbatim working memory of recent exchanges without
-// any LLM call — solving "what did we just talk about?" quickly and cheaply.
+// Messages are fetched newest-first, then greedily selected until the token
+// budget (recentChatTokenBudget) is exhausted, then reversed for chronological
+// presentation. This means long conversations naturally include fewer messages
+// while short ones can include the full fetch batch.
 func GetRecentChatContext(
 	ctx context.Context,
 	q *db.Queries,
@@ -1346,9 +1358,32 @@ func GetRecentChatContext(
 		return ""
 	}
 
-	// Reverse DESC→ASC for chronological presentation.
-	for i, j := 0, len(rows)-1; i < j; i, j = i+1, j-1 {
-		rows[i], rows[j] = rows[j], rows[i]
+	// Rows arrive newest-first (DESC). Greedily select from the front until
+	// the token budget is exhausted; this keeps the most-recent messages when
+	// we have to drop some.
+	tokenEst := func(s string) int { return (len(s) + 3) / 4 }
+	const headerOverhead = 200 // rough token cost for the block header
+	budget := recentChatTokenBudget - headerOverhead
+	var selected []int // indices into rows that fit within budget
+	for i, r := range rows {
+		content := r.Content
+		if len(content) > recentChatMsgTruncate {
+			content = content[:recentChatMsgTruncate]
+		}
+		cost := tokenEst(content) + tokenEst(r.Role) + 5 // speaker label + newline overhead
+		if budget-cost < 0 {
+			break
+		}
+		budget -= cost
+		selected = append(selected, i)
+	}
+	if len(selected) == 0 {
+		return ""
+	}
+
+	// Reverse selected indices so we present messages oldest→newest.
+	for i, j := 0, len(selected)-1; i < j; i, j = i+1, j-1 {
+		selected[i], selected[j] = selected[j], selected[i]
 	}
 
 	var b strings.Builder
@@ -1356,7 +1391,8 @@ func GetRecentChatContext(
 	b.WriteString("The Multica platform has retrieved the following recent exchanges for this session. ")
 	b.WriteString("Use this as context when the user references previous conversations.\n\n")
 	var prevSession pgtype.UUID
-	for _, r := range rows {
+	for _, idx := range selected {
+		r := rows[idx]
 		if r.ChatSessionID != prevSession {
 			if prevSession.Valid {
 				b.WriteString("\n")
@@ -1371,8 +1407,8 @@ func GetRecentChatContext(
 			speaker = "User"
 		}
 		content := r.Content
-		if len(content) > 300 {
-			content = content[:300] + "…"
+		if len(content) > recentChatMsgTruncate {
+			content = content[:recentChatMsgTruncate] + "…"
 		}
 		b.WriteString(speaker + ": " + content + "\n")
 	}
