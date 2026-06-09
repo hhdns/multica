@@ -813,6 +813,7 @@ export interface AgentPersona {
   identity: string | null;
   signal_count: number;
   last_synthesized_at: string | null;
+  episode_recall_count: number;
   recent_signals: AgentInteractionSignal[];
   created_at: string;
   updated_at: string;
@@ -828,6 +829,7 @@ export interface UpdateAgentPersonaRequest {
   blind_spots?: string[];
   variance_level?: number;
   identity?: string;
+  episode_recall_count?: number;
 }
 
 export interface AgentMemory {

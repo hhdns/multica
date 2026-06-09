@@ -31,11 +31,12 @@ type AgentPersonaResponse struct {
 	MoodUpdatedAt      string                         `json:"mood_updated_at"`
 	VarianceLevel      int32                          `json:"variance_level"`
 	Identity           *string                        `json:"identity"`
-	SignalCount        int32                          `json:"signal_count"`
-	LastSynthesizedAt  *string                        `json:"last_synthesized_at"`
+	SignalCount         int32                            `json:"signal_count"`
+	LastSynthesizedAt  *string                          `json:"last_synthesized_at"`
+	EpisodeRecallCount int32                            `json:"episode_recall_count"`
 	RecentSignals      []AgentInteractionSignalResponse `json:"recent_signals"`
-	CreatedAt          string                         `json:"created_at"`
-	UpdatedAt          string                         `json:"updated_at"`
+	CreatedAt          string                           `json:"created_at"`
+	UpdatedAt          string                           `json:"updated_at"`
 }
 
 // AgentInteractionSignalResponse is the wire shape for a single signal.
@@ -60,25 +61,27 @@ type UpdateAgentPersonaRequest struct {
 	BlindSpots         []string `json:"blind_spots"`
 	VarianceLevel      *int32   `json:"variance_level"`
 	Identity           *string  `json:"identity"`
+	EpisodeRecallCount *int32   `json:"episode_recall_count"`
 }
 
 func personaToResponse(p db.AgentPersona, signals []db.AgentInteractionSignal) AgentPersonaResponse {
 	resp := AgentPersonaResponse{
-		AgentID:           uuidToString(p.AgentID),
-		TraitThoroughness: p.TraitThoroughness,
-		TraitVerbosity:    p.TraitVerbosity,
-		TraitRiskAppetite: p.TraitRiskAppetite,
-		TraitCuriosity:    p.TraitCuriosity,
-		TraitConfidence:   p.TraitConfidence,
-		Strengths:         p.Strengths,
-		BlindSpots:        p.BlindSpots,
-		Mood:              p.Mood,
-		MoodUpdatedAt:     p.MoodUpdatedAt.Time.Format("2006-01-02T15:04:05Z07:00"),
-		VarianceLevel:     p.VarianceLevel,
-		SignalCount:       p.SignalCount,
-		CreatedAt:         p.CreatedAt.Time.Format("2006-01-02T15:04:05Z07:00"),
-		UpdatedAt:         p.UpdatedAt.Time.Format("2006-01-02T15:04:05Z07:00"),
-		RecentSignals:     make([]AgentInteractionSignalResponse, 0, len(signals)),
+		AgentID:            uuidToString(p.AgentID),
+		TraitThoroughness:  p.TraitThoroughness,
+		TraitVerbosity:     p.TraitVerbosity,
+		TraitRiskAppetite:  p.TraitRiskAppetite,
+		TraitCuriosity:     p.TraitCuriosity,
+		TraitConfidence:    p.TraitConfidence,
+		Strengths:          p.Strengths,
+		BlindSpots:         p.BlindSpots,
+		Mood:               p.Mood,
+		MoodUpdatedAt:      p.MoodUpdatedAt.Time.Format("2006-01-02T15:04:05Z07:00"),
+		VarianceLevel:      p.VarianceLevel,
+		SignalCount:        p.SignalCount,
+		EpisodeRecallCount: p.EpisodeRecallCount,
+		CreatedAt:          p.CreatedAt.Time.Format("2006-01-02T15:04:05Z07:00"),
+		UpdatedAt:          p.UpdatedAt.Time.Format("2006-01-02T15:04:05Z07:00"),
+		RecentSignals:      make([]AgentInteractionSignalResponse, 0, len(signals)),
 	}
 	if p.Identity.Valid {
 		v := p.Identity.String
@@ -182,6 +185,7 @@ func (h *Handler) UpdateAgentPersona(w http.ResponseWriter, r *http.Request) {
 	blindSpots := current.BlindSpots
 	varianceLevel := current.VarianceLevel
 	identity := current.Identity
+	episodeRecallCount := current.EpisodeRecallCount
 
 	if req.TraitThoroughness != nil {
 		thoroughness = *req.TraitThoroughness
@@ -210,18 +214,28 @@ func (h *Handler) UpdateAgentPersona(w http.ResponseWriter, r *http.Request) {
 	if req.Identity != nil {
 		identity = pgtype.Text{String: *req.Identity, Valid: true}
 	}
+	if req.EpisodeRecallCount != nil {
+		v := *req.EpisodeRecallCount
+		if v < 1 {
+			v = 1
+		} else if v > 20 {
+			v = 20
+		}
+		episodeRecallCount = v
+	}
 
 	updated, err := h.Queries.UpdateAgentPersona(ctx, db.UpdateAgentPersonaParams{
-		AgentID:           agent.ID,
-		TraitThoroughness: thoroughness,
-		TraitVerbosity:    verbosity,
-		TraitRiskAppetite: riskAppetite,
-		TraitCuriosity:    curiosity,
-		TraitConfidence:   confidence,
-		Strengths:         strengths,
-		BlindSpots:        blindSpots,
-		VarianceLevel:     varianceLevel,
-		Identity:          identity,
+		AgentID:            agent.ID,
+		TraitThoroughness:  thoroughness,
+		TraitVerbosity:     verbosity,
+		TraitRiskAppetite:  riskAppetite,
+		TraitCuriosity:     curiosity,
+		TraitConfidence:    confidence,
+		Strengths:          strengths,
+		BlindSpots:         blindSpots,
+		VarianceLevel:      varianceLevel,
+		Identity:           identity,
+		EpisodeRecallCount: episodeRecallCount,
 	})
 	if err != nil {
 		slog.Warn("update agent persona: update failed",

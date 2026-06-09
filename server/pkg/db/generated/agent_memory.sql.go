@@ -233,6 +233,47 @@ func (q *Queries) ExportAgentMemories(ctx context.Context, agentID pgtype.UUID) 
 	return items, nil
 }
 
+const getRecentEpisodeMemories = `-- name: GetRecentEpisodeMemories :many
+SELECT id, content, created_at FROM agent_memory
+WHERE agent_id = $1 AND category = 'conversation_episode'
+ORDER BY created_at DESC
+LIMIT $2
+`
+
+type GetRecentEpisodeMemoriesParams struct {
+	AgentID pgtype.UUID `json:"agent_id"`
+	Limit   int32       `json:"limit"`
+}
+
+type GetRecentEpisodeMemoriesRow struct {
+	ID        pgtype.UUID        `json:"id"`
+	Content   string             `json:"content"`
+	CreatedAt pgtype.Timestamptz `json:"created_at"`
+}
+
+// Returns the most recent conversation_episode memories for an agent, newest
+// first. Used for temporal injection into the task brief independent of
+// semantic search.
+func (q *Queries) GetRecentEpisodeMemories(ctx context.Context, arg GetRecentEpisodeMemoriesParams) ([]GetRecentEpisodeMemoriesRow, error) {
+	rows, err := q.db.Query(ctx, getRecentEpisodeMemories, arg.AgentID, arg.Limit)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []GetRecentEpisodeMemoriesRow{}
+	for rows.Next() {
+		var i GetRecentEpisodeMemoriesRow
+		if err := rows.Scan(&i.ID, &i.Content, &i.CreatedAt); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const listAgentMemories = `-- name: ListAgentMemories :many
 SELECT id, agent_id, workspace_id, content, category, sentiment,
        source_issue_id, source_task_id, importance,

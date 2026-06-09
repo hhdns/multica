@@ -10,16 +10,17 @@ RETURNING *;
 
 -- name: UpdateAgentPersona :one
 UPDATE agent_persona SET
-    trait_thoroughness  = $2,
-    trait_verbosity     = $3,
-    trait_risk_appetite = $4,
-    trait_curiosity     = $5,
-    trait_confidence    = $6,
-    strengths           = $7,
-    blind_spots         = $8,
-    variance_level      = $9,
-    identity            = $10,
-    updated_at          = now()
+    trait_thoroughness   = $2,
+    trait_verbosity      = $3,
+    trait_risk_appetite  = $4,
+    trait_curiosity      = $5,
+    trait_confidence     = $6,
+    strengths            = $7,
+    blind_spots          = $8,
+    variance_level       = $9,
+    identity             = $10,
+    episode_recall_count = $11,
+    updated_at           = now()
 WHERE agent_id = $1
 RETURNING *;
 

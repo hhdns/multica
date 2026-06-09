@@ -260,6 +260,7 @@ export function PersonaTab({ agent, canEdit }: PersonaTabProps) {
         backendConfigured={personaSynthesisBackend !== ""}
       />
       {persona.recent_signals.length > 0 && <SignalsSection persona={persona} />}
+      <EpisodeRecallSection persona={persona} canEdit={canEdit} onSave={(data) => mutation.mutate(data)} saving={mutation.isPending} />
       <div className="flex flex-col gap-2">
         <MemoriesSection agentId={agent.id} workspaceId={agent.workspace_id} canEdit={canEdit} />
         <LLMCallsSection agentId={agent.id} />
@@ -539,6 +540,54 @@ function VarianceSection({
       {canEdit && isDirty && (
         <div className="flex justify-end">
           <Button size="sm" onClick={() => onSave({ variance_level: value })} disabled={saving}>
+            {saving ? <Loader2 className="mr-1.5 h-3.5 w-3.5 animate-spin" /> : <Save className="mr-1.5 h-3.5 w-3.5" />}
+            Save
+          </Button>
+        </div>
+      )}
+    </div>
+  );
+}
+
+function EpisodeRecallSection({
+  persona,
+  canEdit,
+  onSave,
+  saving,
+}: {
+  persona: AgentPersona;
+  canEdit: boolean;
+  onSave: (data: UpdateAgentPersonaRequest) => void;
+  saving: boolean;
+}) {
+  const [value, setValue] = useState(persona.episode_recall_count ?? 5);
+  const isDirty = value !== (persona.episode_recall_count ?? 5);
+
+  return (
+    <div className="flex flex-col gap-2">
+      <SectionTitle>Conversation Recall</SectionTitle>
+      <p className="text-xs text-muted-foreground">
+        How many recent conversations are injected into each task brief via the temporal channel — independent of semantic search.{" "}
+        <span className="text-foreground/60">Recommended range: 3–8. Higher values give the agent more historical context but consume more of the context window; lower values reduce context use but may miss recent interactions.</span>
+      </p>
+      <div className="flex items-center gap-3 rounded-lg border bg-muted/30 px-4 py-3">
+        <input
+          type="number"
+          min={1}
+          max={20}
+          value={value}
+          disabled={!canEdit}
+          onChange={(e) => {
+            const n = Math.max(1, Math.min(20, Number(e.target.value)));
+            setValue(n);
+          }}
+          className="w-16 rounded-md border bg-background px-2 py-1 text-center text-sm tabular-nums disabled:cursor-default disabled:opacity-60"
+        />
+        <span className="text-xs text-muted-foreground">episodes (1–20)</span>
+      </div>
+      {canEdit && isDirty && (
+        <div className="flex justify-end">
+          <Button size="sm" onClick={() => onSave({ episode_recall_count: value })} disabled={saving}>
             {saving ? <Loader2 className="mr-1.5 h-3.5 w-3.5 animate-spin" /> : <Save className="mr-1.5 h-3.5 w-3.5" />}
             Save
           </Button>

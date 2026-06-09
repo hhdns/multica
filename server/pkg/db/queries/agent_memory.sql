@@ -182,3 +182,12 @@ SELECT EXISTS (
     SELECT 1 FROM agent_memory
     WHERE agent_id = $1 AND content = $2
 ) AS exists;
+
+-- name: GetRecentEpisodeMemories :many
+-- Returns the most recent conversation_episode memories for an agent, newest
+-- first. Used for temporal injection into the task brief independent of
+-- semantic search.
+SELECT id, content, created_at FROM agent_memory
+WHERE agent_id = $1 AND category = 'conversation_episode'
+ORDER BY created_at DESC
+LIMIT $2;

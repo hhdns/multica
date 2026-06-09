@@ -90,7 +90,7 @@ UPDATE agent_persona SET
     trait_confidence    = GREATEST(0, LEAST(100, trait_confidence    + $6)),
     updated_at          = now()
 WHERE agent_id = $1
-RETURNING id, agent_id, workspace_id, trait_thoroughness, trait_verbosity, trait_risk_appetite, trait_curiosity, trait_confidence, strengths, blind_spots, mood, mood_updated_at, variance_level, identity, signal_count, last_synthesized_at, created_at, updated_at
+RETURNING id, agent_id, workspace_id, trait_thoroughness, trait_verbosity, trait_risk_appetite, trait_curiosity, trait_confidence, strengths, blind_spots, mood, mood_updated_at, variance_level, identity, signal_count, last_synthesized_at, created_at, updated_at, episode_recall_count
 `
 
 type DriftAgentPersonaTraitsParams struct {
@@ -131,12 +131,13 @@ func (q *Queries) DriftAgentPersonaTraits(ctx context.Context, arg DriftAgentPer
 		&i.LastSynthesizedAt,
 		&i.CreatedAt,
 		&i.UpdatedAt,
+		&i.EpisodeRecallCount,
 	)
 	return i, err
 }
 
 const getAgentPersona = `-- name: GetAgentPersona :one
-SELECT id, agent_id, workspace_id, trait_thoroughness, trait_verbosity, trait_risk_appetite, trait_curiosity, trait_confidence, strengths, blind_spots, mood, mood_updated_at, variance_level, identity, signal_count, last_synthesized_at, created_at, updated_at FROM agent_persona
+SELECT id, agent_id, workspace_id, trait_thoroughness, trait_verbosity, trait_risk_appetite, trait_curiosity, trait_confidence, strengths, blind_spots, mood, mood_updated_at, variance_level, identity, signal_count, last_synthesized_at, created_at, updated_at, episode_recall_count FROM agent_persona
 WHERE agent_id = $1
 `
 
@@ -162,6 +163,7 @@ func (q *Queries) GetAgentPersona(ctx context.Context, agentID pgtype.UUID) (Age
 		&i.LastSynthesizedAt,
 		&i.CreatedAt,
 		&i.UpdatedAt,
+		&i.EpisodeRecallCount,
 	)
 	return i, err
 }
@@ -305,31 +307,33 @@ func (q *Queries) SetAgentPersonaSynthesizedAt(ctx context.Context, agentID pgty
 
 const updateAgentPersona = `-- name: UpdateAgentPersona :one
 UPDATE agent_persona SET
-    trait_thoroughness  = $2,
-    trait_verbosity     = $3,
-    trait_risk_appetite = $4,
-    trait_curiosity     = $5,
-    trait_confidence    = $6,
-    strengths           = $7,
-    blind_spots         = $8,
-    variance_level      = $9,
-    identity            = $10,
-    updated_at          = now()
+    trait_thoroughness   = $2,
+    trait_verbosity      = $3,
+    trait_risk_appetite  = $4,
+    trait_curiosity      = $5,
+    trait_confidence     = $6,
+    strengths            = $7,
+    blind_spots          = $8,
+    variance_level       = $9,
+    identity             = $10,
+    episode_recall_count = $11,
+    updated_at           = now()
 WHERE agent_id = $1
-RETURNING id, agent_id, workspace_id, trait_thoroughness, trait_verbosity, trait_risk_appetite, trait_curiosity, trait_confidence, strengths, blind_spots, mood, mood_updated_at, variance_level, identity, signal_count, last_synthesized_at, created_at, updated_at
+RETURNING id, agent_id, workspace_id, trait_thoroughness, trait_verbosity, trait_risk_appetite, trait_curiosity, trait_confidence, strengths, blind_spots, mood, mood_updated_at, variance_level, identity, signal_count, last_synthesized_at, created_at, updated_at, episode_recall_count
 `
 
 type UpdateAgentPersonaParams struct {
-	AgentID           pgtype.UUID `json:"agent_id"`
-	TraitThoroughness int32       `json:"trait_thoroughness"`
-	TraitVerbosity    int32       `json:"trait_verbosity"`
-	TraitRiskAppetite int32       `json:"trait_risk_appetite"`
-	TraitCuriosity    int32       `json:"trait_curiosity"`
-	TraitConfidence   int32       `json:"trait_confidence"`
-	Strengths         []string    `json:"strengths"`
-	BlindSpots        []string    `json:"blind_spots"`
-	VarianceLevel     int32       `json:"variance_level"`
-	Identity          pgtype.Text `json:"identity"`
+	AgentID            pgtype.UUID `json:"agent_id"`
+	TraitThoroughness  int32       `json:"trait_thoroughness"`
+	TraitVerbosity     int32       `json:"trait_verbosity"`
+	TraitRiskAppetite  int32       `json:"trait_risk_appetite"`
+	TraitCuriosity     int32       `json:"trait_curiosity"`
+	TraitConfidence    int32       `json:"trait_confidence"`
+	Strengths          []string    `json:"strengths"`
+	BlindSpots         []string    `json:"blind_spots"`
+	VarianceLevel      int32       `json:"variance_level"`
+	Identity           pgtype.Text `json:"identity"`
+	EpisodeRecallCount int32       `json:"episode_recall_count"`
 }
 
 func (q *Queries) UpdateAgentPersona(ctx context.Context, arg UpdateAgentPersonaParams) (AgentPersona, error) {
@@ -344,6 +348,7 @@ func (q *Queries) UpdateAgentPersona(ctx context.Context, arg UpdateAgentPersona
 		arg.BlindSpots,
 		arg.VarianceLevel,
 		arg.Identity,
+		arg.EpisodeRecallCount,
 	)
 	var i AgentPersona
 	err := row.Scan(
@@ -365,6 +370,7 @@ func (q *Queries) UpdateAgentPersona(ctx context.Context, arg UpdateAgentPersona
 		&i.LastSynthesizedAt,
 		&i.CreatedAt,
 		&i.UpdatedAt,
+		&i.EpisodeRecallCount,
 	)
 	return i, err
 }
@@ -375,7 +381,7 @@ UPDATE agent_persona SET
     mood_updated_at = now(),
     updated_at      = now()
 WHERE agent_id = $1
-RETURNING id, agent_id, workspace_id, trait_thoroughness, trait_verbosity, trait_risk_appetite, trait_curiosity, trait_confidence, strengths, blind_spots, mood, mood_updated_at, variance_level, identity, signal_count, last_synthesized_at, created_at, updated_at
+RETURNING id, agent_id, workspace_id, trait_thoroughness, trait_verbosity, trait_risk_appetite, trait_curiosity, trait_confidence, strengths, blind_spots, mood, mood_updated_at, variance_level, identity, signal_count, last_synthesized_at, created_at, updated_at, episode_recall_count
 `
 
 type UpdateAgentPersonaMoodParams struct {
@@ -405,6 +411,7 @@ func (q *Queries) UpdateAgentPersonaMood(ctx context.Context, arg UpdateAgentPer
 		&i.LastSynthesizedAt,
 		&i.CreatedAt,
 		&i.UpdatedAt,
+		&i.EpisodeRecallCount,
 	)
 	return i, err
 }
@@ -413,7 +420,7 @@ const upsertAgentPersona = `-- name: UpsertAgentPersona :one
 INSERT INTO agent_persona (agent_id, workspace_id)
 VALUES ($1, $2)
 ON CONFLICT (agent_id) DO UPDATE SET updated_at = now()
-RETURNING id, agent_id, workspace_id, trait_thoroughness, trait_verbosity, trait_risk_appetite, trait_curiosity, trait_confidence, strengths, blind_spots, mood, mood_updated_at, variance_level, identity, signal_count, last_synthesized_at, created_at, updated_at
+RETURNING id, agent_id, workspace_id, trait_thoroughness, trait_verbosity, trait_risk_appetite, trait_curiosity, trait_confidence, strengths, blind_spots, mood, mood_updated_at, variance_level, identity, signal_count, last_synthesized_at, created_at, updated_at, episode_recall_count
 `
 
 type UpsertAgentPersonaParams struct {
@@ -443,6 +450,7 @@ func (q *Queries) UpsertAgentPersona(ctx context.Context, arg UpsertAgentPersona
 		&i.LastSynthesizedAt,
 		&i.CreatedAt,
 		&i.UpdatedAt,
+		&i.EpisodeRecallCount,
 	)
 	return i, err
 }

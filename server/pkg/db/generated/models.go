@@ -83,24 +83,25 @@ type AgentMemory struct {
 }
 
 type AgentPersona struct {
-	ID                pgtype.UUID        `json:"id"`
-	AgentID           pgtype.UUID        `json:"agent_id"`
-	WorkspaceID       pgtype.UUID        `json:"workspace_id"`
-	TraitThoroughness int32              `json:"trait_thoroughness"`
-	TraitVerbosity    int32              `json:"trait_verbosity"`
-	TraitRiskAppetite int32              `json:"trait_risk_appetite"`
-	TraitCuriosity    int32              `json:"trait_curiosity"`
-	TraitConfidence   int32              `json:"trait_confidence"`
-	Strengths         []string           `json:"strengths"`
-	BlindSpots        []string           `json:"blind_spots"`
-	Mood              string             `json:"mood"`
-	MoodUpdatedAt     pgtype.Timestamptz `json:"mood_updated_at"`
-	VarianceLevel     int32              `json:"variance_level"`
-	Identity          pgtype.Text        `json:"identity"`
-	SignalCount       int32              `json:"signal_count"`
-	LastSynthesizedAt pgtype.Timestamptz `json:"last_synthesized_at"`
-	CreatedAt         pgtype.Timestamptz `json:"created_at"`
-	UpdatedAt         pgtype.Timestamptz `json:"updated_at"`
+	ID                 pgtype.UUID        `json:"id"`
+	AgentID            pgtype.UUID        `json:"agent_id"`
+	WorkspaceID        pgtype.UUID        `json:"workspace_id"`
+	TraitThoroughness  int32              `json:"trait_thoroughness"`
+	TraitVerbosity     int32              `json:"trait_verbosity"`
+	TraitRiskAppetite  int32              `json:"trait_risk_appetite"`
+	TraitCuriosity     int32              `json:"trait_curiosity"`
+	TraitConfidence    int32              `json:"trait_confidence"`
+	Strengths          []string           `json:"strengths"`
+	BlindSpots         []string           `json:"blind_spots"`
+	Mood               string             `json:"mood"`
+	MoodUpdatedAt      pgtype.Timestamptz `json:"mood_updated_at"`
+	VarianceLevel      int32              `json:"variance_level"`
+	Identity           pgtype.Text        `json:"identity"`
+	SignalCount        int32              `json:"signal_count"`
+	LastSynthesizedAt  pgtype.Timestamptz `json:"last_synthesized_at"`
+	CreatedAt          pgtype.Timestamptz `json:"created_at"`
+	UpdatedAt          pgtype.Timestamptz `json:"updated_at"`
+	EpisodeRecallCount int32              `json:"episode_recall_count"`
 }
 
 type AgentRuntime struct {

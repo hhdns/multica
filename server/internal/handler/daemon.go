@@ -1743,6 +1743,24 @@ func (h *Handler) ClaimTaskByRuntime(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
+	// Inject recent conversation episodes via the temporal channel (independent
+	// of semantic search). The recall count comes from the agent's persona
+	// config; defaults to 5 when no persona row exists.
+	if resp.Agent != nil {
+		episodeLimit := int32(5)
+		if persona, err := h.Queries.GetAgentPersona(r.Context(), parseUUID(resp.Agent.ID)); err == nil {
+			episodeLimit = persona.EpisodeRecallCount
+		}
+		episodeCtx := service.GetRecentEpisodeContext(r.Context(), h.Queries, parseUUID(resp.Agent.ID), episodeLimit)
+		if episodeCtx != "" {
+			if resp.Agent.MemoryContext == "" {
+				resp.Agent.MemoryContext = episodeCtx
+			} else {
+				resp.Agent.MemoryContext = resp.Agent.MemoryContext + "\n\n" + episodeCtx
+			}
+		}
+	}
+
 	// Workspace isolation check: the daemon uses this response's workspace_id
 	// as the only authority for MULTICA_WORKSPACE_ID in the agent env. An
 	// empty value would make the CLI silently fall back to the user-global
@@ -2029,6 +2047,7 @@ func (h *Handler) CompleteTask(w http.ResponseWriter, r *http.Request) {
 
 	// Record an episodic memory for this task outcome (fire-and-forget).
 	go h.recordTaskOutcomeMemory(context.Background(), task, "completed", workspaceID)
+	go h.recordConversationEpisode(context.Background(), task, workspaceID)
 
 	slog.Info("task completed", "task_id", taskID, "agent_id", uuidToString(task.AgentID))
 	writeJSON(w, http.StatusOK, taskToResponse(*task, workspaceID))
@@ -2196,6 +2215,7 @@ func (h *Handler) FailTask(w http.ResponseWriter, r *http.Request) {
 
 	// Record an episodic memory for this task outcome (fire-and-forget).
 	go h.recordTaskOutcomeMemory(context.Background(), task, "failed", workspaceID)
+	go h.recordConversationEpisode(context.Background(), task, workspaceID)
 
 	slog.Info("task failed", "task_id", taskID, "agent_id", uuidToString(task.AgentID), "task_error", req.Error, "failure_reason", req.FailureReason)
 	writeJSON(w, http.StatusOK, taskToResponse(*task, workspaceID))
@@ -2252,6 +2272,31 @@ func (h *Handler) recordTaskOutcomeMemory(
 	if outcomeType == "completed" {
 		service.MaybeRecordBreakthroughImpression(ctx, h.Queries, task.AgentID, wsUUID, task.IssueID, issueTitle)
 	}
+}
+
+// recordConversationEpisode summarises the just-completed task conversation
+// into a conversation_episode memory. Covers both chat and issue tasks.
+// Runs in a goroutine; errors are logged only.
+func (h *Handler) recordConversationEpisode(
+	ctx context.Context,
+	task *db.AgentTaskQueue,
+	workspaceID string,
+) {
+	if task == nil || !task.AgentID.Valid {
+		return
+	}
+
+	// Resolve the initiator's display name for the summary prompt.
+	initiatorName := ""
+	if task.InitiatorUserID.Valid {
+		if u, err := h.Queries.GetUser(ctx, task.InitiatorUserID); err == nil {
+			initiatorName = u.Name
+		}
+	}
+
+	wsUUID := parseUUID(workspaceID)
+	service.GenerateConversationEpisode(ctx, h.Queries, task.AgentID, wsUUID, task.ID,
+		task.ChatSessionID, initiatorName)
 }
 
 // ---------------------------------------------------------------------------

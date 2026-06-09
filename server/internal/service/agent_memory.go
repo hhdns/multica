@@ -1117,3 +1117,132 @@ Output only the memory text, no preamble.`,
 	logPersonaLLMCall(ctx, q, "task_summary", agentID, workspaceID, cfg.backend, cfg.model, res)
 	return strings.TrimSpace(res.text)
 }
+
+// GenerateConversationEpisode summarises a completed conversation (chat or
+// issue task) into a conversation_episode memory and persists it. It is
+// intended to be called in a detached goroutine after task completion.
+//
+// For chat tasks supply a non-nil chatSessionID; for issue tasks supply a
+// non-nil issueID. The function is a no-op when neither is present.
+func GenerateConversationEpisode(
+	ctx context.Context,
+	q *db.Queries,
+	agentID, workspaceID pgtype.UUID,
+	taskID pgtype.UUID,
+	chatSessionID pgtype.UUID,
+	initiatorName string,
+) {
+	cfg := resolveSynthesisConfig()
+
+	// Build a transcript from task messages (covers both chat and issue tasks).
+	transcript := buildTaskTranscript(ctx, q, taskID, 3000)
+	if strings.TrimSpace(transcript) == "" {
+		return
+	}
+
+	who := initiatorName
+	if who == "" {
+		who = "the user"
+	}
+
+	var summary string
+	if cfg.backend != "" {
+		prompt := fmt.Sprintf(
+			`You are writing a brief episodic memory for an AI agent summarising a just-completed conversation.
+
+Conversation transcript:
+%s
+
+Write 1-2 sentences capturing the essence of what was discussed with %s:
+the main topic(s), any notable preferences or feelings expressed, and any key facts shared.
+Write in the agent's first person. Be specific — avoid generic phrases like "we had a conversation".
+Do not mention task IDs, tool names, or token counts.
+Output only the memory text, no preamble.`,
+			transcript, who,
+		)
+
+		var (
+			res llmCallResult
+			err error
+		)
+		switch cfg.backend {
+		case "anthropic":
+			res, err = callAnthropic(ctx, cfg, prompt, 150)
+		default:
+			res, err = callOpenAICompat(ctx, cfg, prompt, 150)
+		}
+		if err == nil && strings.TrimSpace(res.text) != "" {
+			logPersonaLLMCall(ctx, q, "episode_summary", agentID, workspaceID, cfg.backend, cfg.model, res)
+			summary = strings.TrimSpace(res.text)
+		}
+	}
+
+	// Fallback: plain timestamp + initiator note when LLM is unavailable.
+	if summary == "" {
+		summary = fmt.Sprintf("Had a conversation with %s on %s.", who, time.Now().UTC().Format("2006-01-02"))
+	}
+
+	memID, err := q.CreateAgentMemory(ctx, db.CreateAgentMemoryParams{
+		AgentID:            agentID,
+		WorkspaceID:        workspaceID,
+		Content:            summary,
+		Category:           "conversation_episode",
+		Sentiment:          "neutral",
+		Importance:         0.5,
+		EmotionalValence:   0.0,
+		EmotionalIntensity: 0.1,
+		IsConsolidated:     false,
+		SourceCount:        1,
+		SourceTaskID:       taskID,
+	})
+	if err != nil {
+		slog.Debug("conversation_episode: create memory failed", "error", err)
+		return
+	}
+
+	// Generate embedding so the episode participates in semantic search too.
+	go func() {
+		vec := Embed(context.Background(), summary)
+		if vec != nil {
+			_ = q.SetAgentMemoryEmbedding(context.Background(), db.SetAgentMemoryEmbeddingParams{
+				ID:        memID,
+				Embedding: pgvector.NewVector(vec),
+			})
+		}
+	}()
+}
+
+// GetRecentEpisodeContext fetches the most recent conversation_episode memories
+// for an agent and formats them as a markdown block for brief injection.
+// Returns "" when there are no episodes or the DB call fails.
+func GetRecentEpisodeContext(
+	ctx context.Context,
+	q *db.Queries,
+	agentID pgtype.UUID,
+	limit int32,
+) string {
+	if limit <= 0 {
+		limit = 5
+	}
+	rows, err := q.GetRecentEpisodeMemories(ctx, db.GetRecentEpisodeMemoriesParams{
+		AgentID: agentID,
+		Limit:   limit,
+	})
+	if err != nil || len(rows) == 0 {
+		return ""
+	}
+
+	var b strings.Builder
+	b.WriteString("## Recent Conversations\n\n")
+	for _, r := range rows {
+		ts := ""
+		if r.CreatedAt.Valid {
+			ts = r.CreatedAt.Time.UTC().Format("Jan 2, 15:04") + " — "
+		}
+		b.WriteString("- ")
+		b.WriteString(ts)
+		b.WriteString(r.Content)
+		b.WriteString("\n")
+	}
+	return strings.TrimRight(b.String(), "\n")
+}
