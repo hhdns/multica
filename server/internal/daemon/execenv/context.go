@@ -484,7 +484,7 @@ func renderIssueContext(provider string, ctx TaskContextForEnv) string {
 		return renderQuickCreateContext(ctx)
 	}
 	if ctx.ChatSessionID != "" {
-		return renderChatContext(provider, ctx)
+		return renderChatContext(ctx)
 	}
 
 	var b strings.Builder
@@ -515,20 +515,20 @@ func renderIssueContext(provider string, ctx TaskContextForEnv) string {
 }
 
 // renderChatContext renders issue_context.md for direct chat-session tasks.
-// Issue-task fields (IssueID, trigger, Quick Start CLI) are irrelevant here;
-// instead we point the agent at the ## Recent Conversations section that the
-// server injects into the runtime config at claim time for cross-session recall.
-func renderChatContext(provider string, ctx TaskContextForEnv) string {
-	configFile := runtimeConfigFileName(provider)
+// The conversation history (AgentMemoryContext) is embedded directly here so
+// the agent reads it as immediate file context rather than as instructions in
+// the runtime config — this reliably surfaces cross-session recall because the
+// agent actively reads this file at task start.
+func renderChatContext(ctx TaskContextForEnv) string {
 	var b strings.Builder
 	b.WriteString("# Chat Session\n\n")
 	fmt.Fprintf(&b, "**Session ID:** %s\n\n", ctx.ChatSessionID)
-	if configFile != "" {
-		fmt.Fprintf(&b, "This is a direct chat session. Your cross-session conversation history is available in `%s` under **## Recent Conversations** — reference it when answering questions about previous exchanges.\n\n", configFile)
-	} else {
-		b.WriteString("This is a direct chat session. Your cross-session conversation history is available under **## Recent Conversations** in your runtime config — reference it when answering questions about previous exchanges.\n\n")
+	b.WriteString("This is a direct chat session. Respond to the user's message. Do not attempt to fetch issue details.\n\n")
+
+	if ctx.AgentMemoryContext != "" {
+		b.WriteString(ctx.AgentMemoryContext)
+		b.WriteString("\n\n")
 	}
-	b.WriteString("Respond to the user's message directly. Do not attempt to fetch issue details.\n\n")
 
 	if len(ctx.AgentSkills) > 0 {
 		b.WriteString("## Agent Skills\n\n")
