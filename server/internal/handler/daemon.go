@@ -1733,13 +1733,33 @@ func (h *Handler) ClaimTaskByRuntime(w http.ResponseWriter, r *http.Request) {
 				parseUUID(resp.Agent.ID), initiatorUUID,
 				resp.InitiatorName,
 			)
-			if prefCtx != "" {
-				if resp.Agent.MemoryContext == "" {
-					resp.Agent.MemoryContext = prefCtx
-				} else {
-					resp.Agent.MemoryContext = resp.Agent.MemoryContext + "\n\n" + prefCtx
-				}
-			}
+			appendMemCtx(&resp.Agent.MemoryContext, prefCtx)
+		}
+	}
+
+	// When the task was initiated by another agent, inject that agent's persona
+	// summary so the receiving agent understands who is asking and how they work.
+	if resp.Agent != nil && resp.InitiatorType == "agent" && resp.InitiatorID != "" {
+		peerUUID, err := util.ParseUUID(resp.InitiatorID)
+		if err == nil {
+			peerCtx := service.GetPeerAgentContext(
+				r.Context(), h.Queries,
+				peerUUID, resp.InitiatorName,
+			)
+			appendMemCtx(&resp.Agent.MemoryContext, peerCtx)
+		}
+	}
+
+	// Inject a compact workspace roster (name + description of every other agent)
+	// so agents always know who their colleagues are and can mention or delegate.
+	if resp.Agent != nil && resp.WorkspaceID != "" {
+		wsUUID, err := util.ParseUUID(resp.WorkspaceID)
+		if err == nil {
+			rosterCtx := service.GetWorkspaceRosterContext(
+				r.Context(), h.Queries,
+				wsUUID, parseUUID(resp.Agent.ID),
+			)
+			appendMemCtx(&resp.Agent.MemoryContext, rosterCtx)
 		}
 	}
 
@@ -1766,13 +1786,7 @@ func (h *Handler) ClaimTaskByRuntime(w http.ResponseWriter, r *http.Request) {
 				parseUUID(resp.Agent.ID), wsUUID,
 				msgLimit,
 			)
-			if chatCtx != "" {
-				if resp.Agent.MemoryContext == "" {
-					resp.Agent.MemoryContext = chatCtx
-				} else {
-					resp.Agent.MemoryContext = resp.Agent.MemoryContext + "\n\n" + chatCtx
-				}
-			}
+			appendMemCtx(&resp.Agent.MemoryContext, chatCtx)
 		}
 	}
 
@@ -1781,7 +1795,7 @@ func (h *Handler) ClaimTaskByRuntime(w http.ResponseWriter, r *http.Request) {
 	// complete "arc". Generate a Layer-2 conversation_episode memory for it
 	// asynchronously so past arcs are available in semantic search.
 	if task.ChatSessionID.Valid && resp.Agent != nil {
-		go h.maybeGenerateArcEpisode(context.Background(), task, resp.WorkspaceID)
+		go h.maybeGenerateArcEpisode(context.Background(), task, resp.WorkspaceID, resp.InitiatorName)
 	}
 
 	// Workspace isolation check: the daemon uses this response's workspace_id
@@ -2307,6 +2321,7 @@ func (h *Handler) maybeGenerateArcEpisode(
 	ctx context.Context,
 	task *db.AgentTaskQueue,
 	workspaceID string,
+	initiatorName string,
 ) {
 	const arcGapMinutes = 120 // 2-hour arc boundary
 
@@ -2364,14 +2379,6 @@ func (h *Handler) maybeGenerateArcEpisode(
 	if err := h.Queries.MarkChatSessionEpisode(ctx, task.ChatSessionID); err != nil {
 		slog.Debug("arc episode: mark session failed", "error", err)
 		return
-	}
-
-	// Resolve initiator name for the episode prompt.
-	initiatorName := ""
-	if task.InitiatorUserID.Valid {
-		if u, err := h.Queries.GetUser(ctx, task.InitiatorUserID); err == nil {
-			initiatorName = u.Name
-		}
 	}
 
 	wsUUID := parseUUID(workspaceID)
@@ -2778,4 +2785,17 @@ func (h *Handler) GetTaskGCCheck(w http.ResponseWriter, r *http.Request) {
 		"status":       task.Status,
 		"completed_at": task.CompletedAt.Time,
 	})
+}
+
+// appendMemCtx appends a non-empty block to the agent's MemoryContext,
+// separated by a blank line.
+func appendMemCtx(ctx *string, block string) {
+	if block == "" {
+		return
+	}
+	if *ctx == "" {
+		*ctx = block
+	} else {
+		*ctx = *ctx + "\n\n" + block
+	}
 }

@@ -1538,3 +1538,102 @@ func GetRecentEpisodeContext(
 	}
 	return strings.TrimRight(b.String(), "\n")
 }
+
+// GetWorkspaceRosterContext returns a compact `## Workspace Team` block listing
+// all active agents in the workspace except selfID. Each entry shows only the
+// agent's name and description — persona details are intentionally omitted so
+// agents learn about each other through working together, not upfront disclosure.
+// Returns "" when the workspace has only one agent or the query fails.
+func GetWorkspaceRosterContext(
+	ctx context.Context,
+	q *db.Queries,
+	workspaceID pgtype.UUID,
+	selfID pgtype.UUID,
+) string {
+	agents, err := q.ListAgents(ctx, workspaceID)
+	if err != nil {
+		return ""
+	}
+
+	var b strings.Builder
+	written := 0
+	for _, a := range agents {
+		if a.ID == selfID {
+			continue
+		}
+		if written == 0 {
+			b.WriteString("## Workspace Team\n\n")
+			b.WriteString("Other agents available in this workspace. You may mention or delegate to them in comments.\n\n")
+		}
+		desc := strings.TrimSpace(a.Description)
+		if desc == "" {
+			desc = "No description."
+		}
+		fmt.Fprintf(&b, "- **%s**: %s\n", a.Name, desc)
+		written++
+	}
+	if written == 0 {
+		return ""
+	}
+	return strings.TrimRight(b.String(), "\n")
+}
+
+// GetPeerAgentContext returns a brief persona summary of the peer agent that
+// initiated the current task. Injected only when InitiatorType == "agent" so
+// the receiving agent can understand who is asking and how they work.
+// Returns "" when no persona row exists or the query fails.
+func GetPeerAgentContext(
+	ctx context.Context,
+	q *db.Queries,
+	peerAgentID pgtype.UUID,
+	peerName string,
+) string {
+	persona, err := q.GetAgentPersona(ctx, peerAgentID)
+	if err != nil {
+		return ""
+	}
+
+	var b strings.Builder
+	fmt.Fprintf(&b, "## About %s\n\n", peerName)
+	b.WriteString("The agent that initiated this task has the following character profile:\n\n")
+
+	if identity := strings.TrimSpace(persona.Identity.String); identity != "" {
+		fmt.Fprintf(&b, "%s\n\n", identity)
+	}
+
+	// Append a compact trait summary so the receiver can calibrate tone.
+	traits := []string{}
+	if persona.TraitThoroughness != 0 {
+		level := traitLevel(int(persona.TraitThoroughness))
+		traits = append(traits, fmt.Sprintf("thoroughness: %s", level))
+	}
+	if persona.TraitVerbosity != 0 {
+		level := traitLevel(int(persona.TraitVerbosity))
+		traits = append(traits, fmt.Sprintf("verbosity: %s", level))
+	}
+	if persona.TraitConfidence != 0 {
+		level := traitLevel(int(persona.TraitConfidence))
+		traits = append(traits, fmt.Sprintf("confidence: %s", level))
+	}
+	if len(traits) > 0 {
+		fmt.Fprintf(&b, "Traits: %s.\n", strings.Join(traits, ", "))
+	}
+
+	return strings.TrimRight(b.String(), "\n")
+}
+
+// traitLevel maps a 1-5 trait score to a human-readable label.
+func traitLevel(v int) string {
+	switch {
+	case v <= 1:
+		return "very low"
+	case v == 2:
+		return "low"
+	case v == 3:
+		return "moderate"
+	case v == 4:
+		return "high"
+	default:
+		return "very high"
+	}
+}
