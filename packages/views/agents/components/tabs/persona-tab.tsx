@@ -579,7 +579,8 @@ function SynthesizeSection({
       <div className="flex items-center gap-3 rounded-lg border bg-muted/30 px-4 py-3">
         <div className="min-w-0 flex-1">
           <p className="text-xs text-foreground">
-            Re-generate this agent&apos;s instructions from its current persona data using an LLM.
+            Re-generate this agent&apos;s instructions from its current persona data using an LLM.{" "}
+            <span className="text-muted-foreground">Also runs automatically every 15 feedback signals.</span>
           </p>
           {lastSynth ? (
             <p className="mt-0.5 text-[10px] text-muted-foreground">Last synthesized: {lastSynth}</p>
