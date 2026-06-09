@@ -931,7 +931,7 @@ function EmbeddingsSection({ workspaceId, canEdit }: { workspaceId: string; canE
             <span className="text-muted-foreground">Rebuild if you changed the embedding model or imported memories from another instance.</span>
           </p>
           {lastRebuiltLabel ? (
-            <p className="mt-0.5 text-[10px] text-muted-foreground">Last rebuilt: {lastRebuiltLabel}</p>
+            <p className="mt-0.5 text-[10px] text-muted-foreground">Last workspace rebuild: {lastRebuiltLabel}</p>
           ) : (
             <p className="mt-0.5 text-[10px] text-muted-foreground">Runs in the background — refresh the page after a minute to see updated results.</p>
           )}
