@@ -979,11 +979,14 @@ function MemoriesSection({
 }
 
 const CALL_TYPE_LABELS: Record<string, string> = {
-  synthesis: "Synthesis",
-  classification: "Classification",
-  compaction: "Compaction",
-  emotional_impression: "Emotional",
-  breakthrough_impression: "Breakthrough",
+  synthesis: "Instruction synthesis",
+  classification: "Signal classification",
+  compaction: "Memory compaction",
+  emotional_impression: "Emotional impression",
+  breakthrough_impression: "Breakthrough impression",
+  user_preference: "User preference",
+  task_summary: "Task outcome memory",
+  episode_summary: "Episode summary",
 };
 
 type AggView = "calls" | "day" | "week" | "month";
@@ -1052,6 +1055,9 @@ function LLMCallsSection({ agentId }: { agentId: string }) {
       </button>
       {open && (
         <div className="flex flex-col rounded-lg border">
+          <p className="border-b px-3 py-2 text-[10px] text-muted-foreground">
+            Token usage from persona background processes: signal classification, instruction synthesis, memory compaction, and episode summaries. Does not include tokens used by the agent during task execution.
+          </p>
           {isLoading && (
             <div className="flex items-center justify-center py-6">
               <Loader2 className="h-4 w-4 animate-spin text-muted-foreground" />
