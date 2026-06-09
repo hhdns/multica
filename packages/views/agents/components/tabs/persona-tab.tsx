@@ -259,8 +259,10 @@ export function PersonaTab({ agent, canEdit }: PersonaTabProps) {
         backendConfigured={personaSynthesisBackend !== ""}
       />
       {persona.recent_signals.length > 0 && <SignalsSection persona={persona} />}
-      <MemoriesSection agentId={agent.id} workspaceId={agent.workspace_id} canEdit={canEdit} />
-      <LLMCallsSection agentId={agent.id} />
+      <div className="flex flex-col gap-2">
+        <MemoriesSection agentId={agent.id} workspaceId={agent.workspace_id} canEdit={canEdit} />
+        <LLMCallsSection agentId={agent.id} />
+      </div>
     </div>
   );
 }
@@ -631,7 +633,7 @@ function MemoriesSection({
   canEdit: boolean;
 }) {
   const [open, setOpen] = useState(false);
-  const [prefOpen, setPrefOpen] = useState(true);
+  const [prefOpen, setPrefOpen] = useState(false);
   const [rebuildOpen, setRebuildOpen] = useState(false);
   const [lastRebuiltAt, setLastRebuiltAt] = useState<Date | null>(null);
   const embeddingModelStale = useConfigStore((s) => s.embeddingModelStale);
@@ -658,7 +660,7 @@ function MemoriesSection({
   const preferenceMemories = memories?.filter((m: AgentMemory) => m.category === "user_preference");
 
   return (
-    <div className="flex flex-col gap-2 pb-4">
+    <div className="flex flex-col gap-2">
       {embeddingModelStale && canEdit && (
         <div className="flex items-center justify-between gap-3 rounded-lg border border-amber-200 bg-amber-50 px-3 py-2.5 text-xs dark:border-amber-900/50 dark:bg-amber-950/30">
           <span className="text-amber-800 dark:text-amber-300">
@@ -755,7 +757,7 @@ function MemoriesSection({
         </div>
       )}
       {canEdit && (
-        <div className="mt-2 border-t pt-3">
+        <>
           <button
             className="flex w-full items-center gap-2 text-xs font-semibold uppercase tracking-wide text-muted-foreground hover:text-foreground"
             onClick={() => setRebuildOpen((v) => !v)}
@@ -765,7 +767,7 @@ function MemoriesSection({
             {rebuildOpen ? <ChevronDown className="ml-auto h-3 w-3" /> : <ChevronRight className="ml-auto h-3 w-3" />}
           </button>
           {rebuildOpen && (
-            <div className="mt-2 flex items-start justify-between gap-4 rounded-lg border px-3 py-3">
+            <div className="flex items-start justify-between gap-4 rounded-lg border px-3 py-3">
               <div className="min-w-0 text-xs text-muted-foreground">
                 <p className="mb-1 font-medium text-foreground">Rebuild memory embeddings</p>
                 <p>
@@ -800,7 +802,7 @@ function MemoriesSection({
               </div>
             </div>
           )}
-        </div>
+        </>
       )}
     </div>
   );
@@ -827,7 +829,7 @@ function LLMCallsSection({ agentId }: { agentId: string }) {
   const totalOut = calls?.reduce((s, c) => s + c.output_tokens, 0) ?? 0;
 
   return (
-    <div className="flex flex-col gap-2 pb-4">
+    <div className="flex flex-col gap-2">
       <button
         className="flex items-center gap-2 text-xs font-semibold uppercase tracking-wide text-muted-foreground hover:text-foreground"
         onClick={() => setOpen((v) => !v)}
