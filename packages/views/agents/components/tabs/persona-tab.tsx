@@ -95,6 +95,7 @@ export function PersonaTab({ agent, canEdit }: PersonaTabProps) {
 
   const [importing, setImporting] = useState(false);
   const [importResult, setImportResult] = useState<{ imported: number; skipped: number } | null>(null);
+  const [importError, setImportError] = useState<string | null>(null);
   // pendingImport holds a parsed bundle + unmapped emails waiting for user to assign mappings.
   const [pendingImport, setPendingImport] = useState<{
     bundle: object;
@@ -123,9 +124,10 @@ export function PersonaTab({ agent, canEdit }: PersonaTabProps) {
     if (!file) return;
     e.target.value = "";
     setImportResult(null);
+    setImportError(null);
     const text = await file.text();
     let bundle: { memories?: { category?: string; source_user_email?: string }[] };
-    try { bundle = JSON.parse(text); } catch { return; }
+    try { bundle = JSON.parse(text); } catch { setImportError("Invalid JSON file."); return; }
 
     const unmappedEmails = [
       ...new Set(
@@ -144,11 +146,14 @@ export function PersonaTab({ agent, canEdit }: PersonaTabProps) {
 
   const doImport = async (bundle: object, userMappings: Record<string, string>) => {
     setImporting(true);
+    setImportError(null);
     try {
       const result = await api.importAgentPersona(agent.id, bundle, userMappings);
       setImportResult({ imported: result.memories_imported, skipped: result.memories_skipped });
       qc.invalidateQueries({ queryKey: ["agent-memories", agent.id] });
       qc.invalidateQueries({ queryKey });
+    } catch (err) {
+      setImportError(err instanceof Error ? err.message : "Import failed.");
     } finally {
       setImporting(false);
       setPendingImport(null);
@@ -182,6 +187,9 @@ export function PersonaTab({ agent, canEdit }: PersonaTabProps) {
           <span className="mr-auto text-[11px] text-muted-foreground">
             Imported {importResult.imported} memories{importResult.skipped > 0 ? `, skipped ${importResult.skipped} duplicates` : ""}.
           </span>
+        )}
+        {importError && (
+          <span className="mr-auto text-[11px] text-destructive">{importError}</span>
         )}
         <Button size="sm" variant="ghost" className="h-7 gap-1.5 text-xs" onClick={handleExport}>
           <Download className="h-3.5 w-3.5" />
@@ -715,32 +723,36 @@ function MemoriesSection({
           ))}
         </div>
       )}
-      {preferenceMemories && preferenceMemories.length > 0 && (
-        <>
-          <button
-            className="flex items-center gap-2 text-xs font-semibold uppercase tracking-wide text-muted-foreground hover:text-foreground"
-            onClick={() => setPrefOpen((v) => !v)}
-          >
-            <UserRound className="h-3.5 w-3.5" />
-            User Preferences
-            {prefOpen ? <ChevronDown className="ml-auto h-3 w-3" /> : <ChevronRight className="ml-auto h-3 w-3" />}
-          </button>
-          {prefOpen && (
-            <div className="flex flex-col rounded-lg border">
-              {preferenceMemories.map((m: AgentMemory) => (
-                <div key={m.id} className="flex items-start gap-2.5 border-b px-3 py-2.5 last:border-b-0">
-                  <div className="min-w-0 flex-1">
-                    <p className="text-xs text-foreground">{m.content}</p>
-                    <div className="mt-0.5 flex items-center gap-2 text-[10px] text-muted-foreground">
-                      <span>{new Date(m.created_at).toLocaleDateString()}</span>
-                      {m.has_embedding && <span className="rounded bg-muted px-1 py-px font-mono">vec</span>}
-                    </div>
-                  </div>
-                </div>
-              ))}
+      <button
+        className="flex items-center gap-2 text-xs font-semibold uppercase tracking-wide text-muted-foreground hover:text-foreground"
+        onClick={() => setPrefOpen((v) => !v)}
+      >
+        <UserRound className="h-3.5 w-3.5" />
+        User Preferences
+        {prefOpen ? <ChevronDown className="ml-auto h-3 w-3" /> : <ChevronRight className="ml-auto h-3 w-3" />}
+      </button>
+      {prefOpen && (
+        <div className="flex flex-col rounded-lg border">
+          {isLoading && (
+            <div className="flex items-center justify-center py-6">
+              <Loader2 className="h-4 w-4 animate-spin text-muted-foreground" />
             </div>
           )}
-        </>
+          {!isLoading && (!preferenceMemories || preferenceMemories.length === 0) && (
+            <p className="px-3 py-4 text-xs text-muted-foreground">No user preferences recorded yet. Preferences are learned from interactions with workspace members.</p>
+          )}
+          {preferenceMemories && preferenceMemories.length > 0 && preferenceMemories.map((m: AgentMemory) => (
+            <div key={m.id} className="flex items-start gap-2.5 border-b px-3 py-2.5 last:border-b-0">
+              <div className="min-w-0 flex-1">
+                <p className="text-xs text-foreground">{m.content}</p>
+                <div className="mt-0.5 flex items-center gap-2 text-[10px] text-muted-foreground">
+                  <span>{new Date(m.created_at).toLocaleDateString()}</span>
+                  {m.has_embedding && <span className="rounded bg-muted px-1 py-px font-mono">vec</span>}
+                </div>
+              </div>
+            </div>
+          ))}
+        </div>
       )}
       {canEdit && (
         <div className="mt-2 border-t pt-3">
