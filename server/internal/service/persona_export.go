@@ -235,9 +235,10 @@ func ImportPersona(
 
 		imported++
 
-		// Enqueue embedding generation.
+		// Enqueue embedding generation. Use a detached context so the goroutine
+		// is not cancelled when the HTTP request context expires.
 		go func(id pgtype.UUID, content string) {
-			vec := Embed(ctx, content)
+			vec := Embed(context.Background(), content)
 			if vec != nil {
 				_ = q.SetAgentMemoryEmbedding(context.Background(), db.SetAgentMemoryEmbeddingParams{
 					ID:        id,
