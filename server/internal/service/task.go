@@ -739,6 +739,40 @@ func (s *TaskService) EnqueueChatTask(ctx context.Context, chatSession db.ChatSe
 	return task, nil
 }
 
+// EnqueueGroupChatTasks creates one queued task per target agent in a group
+// chat session. Each task is independent — the daemon runtime for each agent
+// claims and executes its own task. Agents that are archived or have no runtime
+// are skipped silently (the session may contain a mix of live and offline agents).
+// Returns the created tasks (may be fewer than len(targetAgentIDs)).
+func (s *TaskService) EnqueueGroupChatTasks(ctx context.Context, chatSession db.ChatSession, targetAgentIDs []pgtype.UUID, initiatorUserID pgtype.UUID) ([]db.AgentTaskQueue, error) {
+	var tasks []db.AgentTaskQueue
+	for _, agentID := range targetAgentIDs {
+		agent, err := s.Queries.GetAgent(ctx, agentID)
+		if err != nil || agent.ArchivedAt.Valid || !agent.RuntimeID.Valid {
+			continue
+		}
+		task, err := s.Queries.CreateChatTask(ctx, db.CreateChatTaskParams{
+			AgentID:         agentID,
+			RuntimeID:       agent.RuntimeID,
+			Priority:        2,
+			ChatSessionID:   chatSession.ID,
+			InitiatorUserID: initiatorUserID,
+		})
+		if err != nil {
+			slog.Error("group chat task enqueue failed", "agent_id", util.UUIDToString(agentID), "error", err)
+			continue
+		}
+		slog.Info("group chat task enqueued", "task_id", util.UUIDToString(task.ID), "agent_id", util.UUIDToString(agentID))
+		s.broadcastTaskEvent(ctx, protocol.EventTaskQueued, task)
+		s.NotifyTaskEnqueued(ctx, task)
+		tasks = append(tasks, task)
+	}
+	if len(tasks) == 0 {
+		return nil, fmt.Errorf("no reachable agents in target list")
+	}
+	return tasks, nil
+}
+
 // CancelTasksForIssue cancels every active task on the issue, reconciles each
 // affected agent's status, and broadcasts task:cancelled events so frontends
 // clear their live cards.
@@ -1322,11 +1356,12 @@ func (s *TaskService) CompleteTask(ctx context.Context, taskID pgtype.UUID, resu
 			// agent stdout becomes a real newline so the chat panel renders
 			// paragraph breaks instead of one wall of prose.
 			body := util.UnescapeBackslashEscapes(payload.Output)
-			row, err := s.Queries.CreateChatMessage(ctx, db.CreateChatMessageParams{
+			row, err := s.Queries.CreateChatMessageWithAgent(ctx, db.CreateChatMessageWithAgentParams{
 				ChatSessionID: task.ChatSessionID,
 				Role:          "assistant",
 				Content:       redact.Text(body),
 				TaskID:        task.ID,
+				AgentID:       task.AgentID,
 				ElapsedMs:     computeChatElapsedMs(task),
 			})
 			if err != nil {

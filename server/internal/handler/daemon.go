@@ -1750,6 +1750,31 @@ func (h *Handler) ClaimTaskByRuntime(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
+	// For group chat sessions, inject a concise participant list so the agent
+	// knows who else is in the conversation and can calibrate its responses.
+	if resp.Agent != nil && resp.ChatSessionID != "" {
+		if cs, err := h.Queries.GetChatSession(r.Context(), parseUUID(resp.ChatSessionID)); err == nil && cs.IsGroup {
+			participantIDs, err := h.Queries.GetChatSessionParticipants(r.Context(), cs.ID)
+			if err == nil && len(participantIDs) > 0 {
+				var peerNames []string
+				for _, pid := range participantIDs {
+					if pid == parseUUID(resp.Agent.ID) {
+						continue
+					}
+					if a, err := h.Queries.GetAgent(r.Context(), pid); err == nil {
+						peerNames = append(peerNames, a.Name)
+					}
+				}
+				if len(peerNames) > 0 {
+					block := "## Group Chat\n\nYou are in a group conversation with: " + strings.Join(peerNames, ", ") + ".\n" +
+						"Other agents may also respond to messages in this session.\n" +
+						"Respond to messages directed at you via @mention, or as the current relay agent."
+					appendMemCtx(&resp.Agent.MemoryContext, block)
+				}
+			}
+		}
+	}
+
 	// Inject a compact workspace roster (name + description of every other agent)
 	// so agents always know who their colleagues are and can mention or delegate.
 	if resp.Agent != nil && resp.WorkspaceID != "" {

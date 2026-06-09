@@ -1,6 +1,7 @@
 package handler
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"log/slog"
@@ -29,8 +30,10 @@ const chatSessionTitleMaxLen = 200
 // ---------------------------------------------------------------------------
 
 type CreateChatSessionRequest struct {
-	AgentID string `json:"agent_id"`
-	Title   string `json:"title"`
+	AgentID     string   `json:"agent_id"`
+	AgentIDs    []string `json:"agent_ids"`    // len > 1 → group chat
+	Title       string   `json:"title"`
+	RoutingMode string   `json:"routing_mode"` // "mention" | "relay"; default "relay"
 }
 
 func (h *Handler) CreateChatSession(w http.ResponseWriter, r *http.Request) {
@@ -45,53 +48,102 @@ func (h *Handler) CreateChatSession(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "invalid request body")
 		return
 	}
-	if req.AgentID == "" {
-		writeError(w, http.StatusBadRequest, "agent_id is required")
+
+	// Normalise: agent_ids takes priority; fall back to agent_id for single-agent sessions.
+	agentIDStrs := req.AgentIDs
+	if len(agentIDStrs) == 0 {
+		if req.AgentID == "" {
+			writeError(w, http.StatusBadRequest, "agent_id or agent_ids is required")
+			return
+		}
+		agentIDStrs = []string{req.AgentID}
+	}
+	if len(agentIDStrs) > 10 {
+		writeError(w, http.StatusBadRequest, "too many agents (max 10)")
 		return
 	}
-	agentID, ok := parseUUIDOrBadRequest(w, req.AgentID, "agent_id")
-	if !ok {
-		return
-	}
+
 	workspaceUUID, ok := parseUUIDOrBadRequest(w, workspaceID, "workspace id")
 	if !ok {
 		return
 	}
 
-	// Verify agent exists in workspace.
-	agent, err := h.Queries.GetAgentInWorkspace(r.Context(), db.GetAgentInWorkspaceParams{
-		ID:          agentID,
-		WorkspaceID: workspaceUUID,
-	})
-	if err != nil {
-		writeError(w, http.StatusNotFound, "agent not found")
-		return
+	// Parse and validate all agent IDs.
+	agentUUIDs := make([]pgtype.UUID, len(agentIDStrs))
+	for i, s := range agentIDStrs {
+		id, ok := parseUUIDOrBadRequest(w, s, "agent_ids")
+		if !ok {
+			return
+		}
+		agentUUIDs[i] = id
 	}
-	if agent.ArchivedAt.Valid {
-		writeError(w, http.StatusBadRequest, "agent is archived")
-		return
-	}
-	// Private-agent gate: members must be in allowed_principals to start
-	// a chat with a private agent. Agent-to-agent chat sessions bypass
-	// the gate so A2A collaboration still works.
+
+	// Verify every agent exists in the workspace and is not archived.
 	actorType, actorID := h.resolveActor(r, userID, workspaceID)
-	if !h.canAccessPrivateAgent(r.Context(), agent, actorType, actorID, workspaceID) {
-		writeError(w, http.StatusForbidden, "you do not have access to this agent")
+	for _, agentUUID := range agentUUIDs {
+		agent, err := h.Queries.GetAgentInWorkspace(r.Context(), db.GetAgentInWorkspaceParams{
+			ID:          agentUUID,
+			WorkspaceID: workspaceUUID,
+		})
+		if err != nil {
+			writeError(w, http.StatusNotFound, "agent not found")
+			return
+		}
+		if agent.ArchivedAt.Valid {
+			writeError(w, http.StatusBadRequest, "agent is archived")
+			return
+		}
+		if !h.canAccessPrivateAgent(r.Context(), agent, actorType, actorID, workspaceID) {
+			writeError(w, http.StatusForbidden, "you do not have access to this agent")
+			return
+		}
+	}
+
+	isGroup := len(agentUUIDs) > 1
+
+	if !isGroup {
+		// Single-agent path: unchanged behaviour.
+		session, err := h.Queries.CreateChatSession(r.Context(), db.CreateChatSessionParams{
+			WorkspaceID: workspaceUUID,
+			AgentID:     agentUUIDs[0],
+			CreatorID:   parseUUID(userID),
+			Title:       req.Title,
+		})
+		if err != nil {
+			writeError(w, http.StatusInternalServerError, "failed to create chat session")
+			return
+		}
+		writeJSON(w, http.StatusCreated, chatSessionToResponse(session, nil))
 		return
 	}
 
-	session, err := h.Queries.CreateChatSession(r.Context(), db.CreateChatSessionParams{
+	// Group chat: default routing mode is relay.
+	routingMode := req.RoutingMode
+	if routingMode != "mention" {
+		routingMode = "relay"
+	}
+
+	session, err := h.Queries.CreateGroupChatSession(r.Context(), db.CreateGroupChatSessionParams{
 		WorkspaceID: workspaceUUID,
-		AgentID:     agentID,
+		AgentID:     agentUUIDs[0], // primary agent
 		CreatorID:   parseUUID(userID),
 		Title:       req.Title,
+		RoutingMode: pgtype.Text{String: routingMode, Valid: true},
 	})
 	if err != nil {
-		writeError(w, http.StatusInternalServerError, "failed to create chat session")
+		writeError(w, http.StatusInternalServerError, "failed to create group chat session")
 		return
 	}
 
-	writeJSON(w, http.StatusCreated, chatSessionToResponse(session))
+	if err := h.Queries.AddChatSessionParticipants(r.Context(), db.AddChatSessionParticipantsParams{
+		ChatSessionID: session.ID,
+		AgentIds:      agentUUIDs,
+	}); err != nil {
+		writeError(w, http.StatusInternalServerError, "failed to add participants")
+		return
+	}
+
+	writeJSON(w, http.StatusCreated, chatSessionToResponse(session, agentIDStrs))
 }
 
 func (h *Handler) ListChatSessions(w http.ResponseWriter, r *http.Request) {
@@ -145,6 +197,8 @@ func (h *Handler) ListChatSessions(w http.ResponseWriter, r *http.Request) {
 				Title:       s.Title,
 				Status:      s.Status,
 				HasUnread:   s.HasUnread,
+				IsGroup:     s.IsGroup,
+				RoutingMode: s.RoutingMode.String,
 				CreatedAt:   timestampToString(s.CreatedAt),
 				UpdatedAt:   timestampToString(s.UpdatedAt),
 			})
@@ -171,6 +225,8 @@ func (h *Handler) ListChatSessions(w http.ResponseWriter, r *http.Request) {
 				Title:       s.Title,
 				Status:      s.Status,
 				HasUnread:   s.HasUnread,
+				IsGroup:     s.IsGroup,
+				RoutingMode: s.RoutingMode.String,
 				CreatedAt:   timestampToString(s.CreatedAt),
 				UpdatedAt:   timestampToString(s.UpdatedAt),
 			})
@@ -239,7 +295,7 @@ func (h *Handler) GetChatSession(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	writeJSON(w, http.StatusOK, chatSessionToResponse(session))
+	writeJSON(w, http.StatusOK, chatSessionToResponse(session, nil))
 }
 
 type UpdateChatSessionRequest struct {
@@ -299,7 +355,7 @@ func (h *Handler) UpdateChatSession(w http.ResponseWriter, r *http.Request) {
 		UpdatedAt:     timestampToString(updated.UpdatedAt),
 	})
 
-	writeJSON(w, http.StatusOK, chatSessionToResponse(updated))
+	writeJSON(w, http.StatusOK, chatSessionToResponse(updated, nil))
 }
 
 // DeleteChatSession hard-deletes a chat session owned by the caller. The
@@ -384,8 +440,9 @@ type SendChatMessageRequest struct {
 }
 
 type SendChatMessageResponse struct {
-	MessageID string `json:"message_id"`
-	TaskID    string `json:"task_id"`
+	MessageID string   `json:"message_id"`
+	TaskID    string   `json:"task_id,omitempty"`  // single-agent sessions
+	TaskIDs   []string `json:"task_ids,omitempty"` // group sessions
 	// AttachmentIDs are the attachment rows actually bound to this message by
 	// the server. The client diffs these against the ids it requested so it
 	// can warn the user when an attachment silently failed to bind — no extra
@@ -486,9 +543,66 @@ func (h *Handler) SendChatMessage(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	// Enqueue a chat task after the message exists. For web chat the sender is
-	// the authenticated request user (sessions are creator-only), so they are
-	// the task initiator — surfaced to the agent under `## Task Initiator`.
+	// Touch session updated_at.
+	if err := h.Queries.TouchChatSession(r.Context(), session.ID); err != nil {
+		slog.Warn("failed to touch chat session", "session_id", sessionID, "error", err)
+	}
+
+	platform, _, _ := middleware.ClientMetadataFromContext(r.Context())
+	resolvedSessionID := uuidToString(session.ID)
+
+	if session.IsGroup {
+		// Group chat: resolve target agents then enqueue one task per target.
+		targetIDs, err := h.resolveGroupChatTargets(r.Context(), session, req.Content)
+		if err != nil {
+			writeError(w, http.StatusInternalServerError, "failed to resolve chat targets: "+err.Error())
+			return
+		}
+
+		// Broadcast the user message (no task IDs yet — tasks may be empty for mention mode with no @).
+		h.publishChat(protocol.EventChatMessage, workspaceID, "member", userID, resolvedSessionID, protocol.ChatMessagePayload{
+			ChatSessionID: resolvedSessionID,
+			MessageID:     uuidToString(msg.ID),
+			Role:          "user",
+			Content:       req.Content,
+			CreatedAt:     timestampToString(msg.CreatedAt),
+		})
+
+		if len(targetIDs) == 0 {
+			// mention mode, no @mention — save message but don't trigger any agent.
+			writeJSON(w, http.StatusCreated, SendChatMessageResponse{
+				MessageID: uuidToString(msg.ID),
+				CreatedAt: timestampToString(msg.CreatedAt),
+			})
+			return
+		}
+
+		tasks, err := h.TaskService.EnqueueGroupChatTasks(r.Context(), session, targetIDs, parseUUID(userID))
+		if err != nil {
+			writeError(w, http.StatusInternalServerError, "failed to enqueue group chat tasks: "+err.Error())
+			return
+		}
+
+		taskIDs := make([]string, len(tasks))
+		for i, t := range tasks {
+			taskIDs[i] = uuidToString(t.ID)
+			taskContext := h.TaskService.AnalyticsContextForTask(r.Context(), t)
+			obsmetrics.RecordEvent(h.Analytics, h.Metrics, analytics.ChatMessageSent(
+				userID, workspaceID, resolvedSessionID,
+				uuidToString(t.ID), uuidToString(session.AgentID),
+				taskContext.RuntimeMode, taskContext.Provider, platform,
+			))
+		}
+
+		writeJSON(w, http.StatusCreated, SendChatMessageResponse{
+			MessageID: uuidToString(msg.ID),
+			TaskIDs:   taskIDs,
+			CreatedAt: timestampToString(tasks[0].CreatedAt),
+		})
+		return
+	}
+
+	// Single-agent path: unchanged behaviour.
 	task, err := h.TaskService.EnqueueChatTask(r.Context(), session, parseUUID(userID))
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "failed to enqueue chat task: "+err.Error())
@@ -508,16 +622,11 @@ func (h *Handler) SendChatMessage(w http.ResponseWriter, r *http.Request) {
 		)
 	}
 
-	// Touch session updated_at.
-	if err := h.Queries.TouchChatSession(r.Context(), session.ID); err != nil {
-		slog.Warn("failed to touch chat session", "session_id", sessionID, "error", err)
-	}
 	taskContext := h.TaskService.AnalyticsContextForTask(r.Context(), task)
-	platform, _, _ := middleware.ClientMetadataFromContext(r.Context())
 	obsmetrics.RecordEvent(h.Analytics, h.Metrics, analytics.ChatMessageSent(
 		userID,
 		workspaceID,
-		uuidToString(session.ID),
+		resolvedSessionID,
 		uuidToString(task.ID),
 		uuidToString(session.AgentID),
 		taskContext.RuntimeMode,
@@ -526,7 +635,6 @@ func (h *Handler) SendChatMessage(w http.ResponseWriter, r *http.Request) {
 	))
 
 	// Broadcast the user message.
-	resolvedSessionID := uuidToString(session.ID)
 	h.publishChat(protocol.EventChatMessage, workspaceID, "member", userID, resolvedSessionID, protocol.ChatMessagePayload{
 		ChatSessionID: resolvedSessionID,
 		MessageID:     uuidToString(msg.ID),
@@ -965,9 +1073,12 @@ type ChatSessionResponse struct {
 	Title       string `json:"title"`
 	Status      string `json:"status"`
 	// Only populated by list endpoints — single-session fetches return false.
-	HasUnread bool   `json:"has_unread"`
-	CreatedAt string `json:"created_at"`
-	UpdatedAt string `json:"updated_at"`
+	HasUnread   bool     `json:"has_unread"`
+	IsGroup     bool     `json:"is_group"`
+	AgentIDs    []string `json:"agent_ids,omitempty"`    // all participants (group only)
+	RoutingMode string   `json:"routing_mode,omitempty"` // "mention" | "relay" (group only)
+	CreatedAt   string   `json:"created_at"`
+	UpdatedAt   string   `json:"updated_at"`
 }
 
 type ChatMessageResponse struct {
@@ -976,6 +1087,7 @@ type ChatMessageResponse struct {
 	Role          string  `json:"role"`
 	Content       string  `json:"content"`
 	TaskID        *string `json:"task_id"`
+	AgentID       *string `json:"agent_id,omitempty"` // which agent sent this (group only)
 	CreatedAt     string  `json:"created_at"`
 	// FailureReason flags an assistant row synthesized by FailTask's chat
 	// fallback. Front-end uses it to switch to the destructive bubble.
@@ -991,21 +1103,29 @@ type ChatMessageResponse struct {
 	Attachments []AttachmentResponse `json:"attachments,omitempty"`
 }
 
-func chatSessionToResponse(s db.ChatSession) ChatSessionResponse {
-	return ChatSessionResponse{
+// chatSessionToResponse converts a DB row to a response. participantIDs is
+// populated for group sessions; pass nil for single-agent sessions.
+func chatSessionToResponse(s db.ChatSession, participantIDs []string) ChatSessionResponse {
+	resp := ChatSessionResponse{
 		ID:          uuidToString(s.ID),
 		WorkspaceID: uuidToString(s.WorkspaceID),
 		AgentID:     uuidToString(s.AgentID),
 		CreatorID:   uuidToString(s.CreatorID),
 		Title:       s.Title,
 		Status:      s.Status,
+		IsGroup:     s.IsGroup,
+		RoutingMode: s.RoutingMode.String,
 		CreatedAt:   timestampToString(s.CreatedAt),
 		UpdatedAt:   timestampToString(s.UpdatedAt),
 	}
+	if len(participantIDs) > 0 {
+		resp.AgentIDs = participantIDs
+	}
+	return resp
 }
 
 func chatMessageToResponse(m db.ChatMessage, attachments []AttachmentResponse) ChatMessageResponse {
-	return ChatMessageResponse{
+	resp := ChatMessageResponse{
 		ID:            uuidToString(m.ID),
 		ChatSessionID: uuidToString(m.ChatSessionID),
 		Role:          m.Role,
@@ -1016,4 +1136,51 @@ func chatMessageToResponse(m db.ChatMessage, attachments []AttachmentResponse) C
 		ElapsedMs:     int8ToPtr(m.ElapsedMs),
 		Attachments:   attachments,
 	}
+	if m.AgentID.Valid {
+		s := uuidToString(m.AgentID)
+		resp.AgentID = &s
+	}
+	return resp
+}
+
+// resolveGroupChatTargets returns the agent UUIDs that should respond to a
+// group chat message. For mention mode: only @mentioned participants. For relay
+// mode: @mentioned agents win; otherwise the last responding agent continues
+// (default to primary agent on first message).
+func (h *Handler) resolveGroupChatTargets(ctx context.Context, session db.ChatSession, content string) ([]pgtype.UUID, error) {
+	participantUUIDs, err := h.Queries.GetChatSessionParticipants(ctx, session.ID)
+	if err != nil {
+		return nil, err
+	}
+	participantSet := make(map[string]pgtype.UUID, len(participantUUIDs))
+	for _, id := range participantUUIDs {
+		participantSet[uuidToString(id)] = id
+	}
+
+	// Collect agent @mentions from the message content.
+	var mentionedAgents []pgtype.UUID
+	for _, m := range util.ParseMentions(content) {
+		if m.Type == "agent" {
+			if id, ok := participantSet[m.ID]; ok {
+				mentionedAgents = append(mentionedAgents, id)
+			}
+		}
+	}
+
+	if len(mentionedAgents) > 0 {
+		return mentionedAgents, nil
+	}
+
+	// No explicit @mention.
+	if session.RoutingMode.String == "mention" {
+		return nil, nil // mention mode: silence when no @mention
+	}
+
+	// Relay mode: continue with last responding agent.
+	lastAgentID, err := h.Queries.GetLastAssistantAgentInSession(ctx, session.ID)
+	if err != nil {
+		// No assistant message yet — use primary agent.
+		return []pgtype.UUID{session.AgentID}, nil
+	}
+	return []pgtype.UUID{lastAgentID}, nil
 }
