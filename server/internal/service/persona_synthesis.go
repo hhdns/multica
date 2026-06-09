@@ -9,6 +9,7 @@ import (
 	"log/slog"
 	"net/http"
 	"os"
+	"regexp"
 	"strings"
 	"time"
 
@@ -26,6 +27,11 @@ const (
 	anthropicMessagesPath = "/v1/messages"
 	openAIChatPath        = "/chat/completions"
 )
+
+// thinkTagRe strips <think>...</think> blocks that llama.cpp embeds directly
+// in the content field when serving thinking-capable models (Qwen3, etc.).
+// The (?s) flag makes . match newlines.
+var thinkTagRe = regexp.MustCompile(`(?s)<think>.*?</think>`)
 
 // synthesisConfig is resolved once per call from environment variables.
 type synthesisConfig struct {
@@ -360,9 +366,13 @@ func callAnthropic(ctx context.Context, cfg synthesisConfig, userPrompt string, 
 // ---- OpenAI-compat backend ----
 
 type openAIRequest struct {
-	Model     string          `json:"model"`
-	MaxTokens int             `json:"max_tokens"`
-	Messages  []openAIMessage `json:"messages"`
+	Model              string         `json:"model"`
+	MaxTokens          int            `json:"max_tokens"`
+	Messages           []openAIMessage `json:"messages"`
+	// vLLM (Qwen3, DeepSeek-R1): disable chain-of-thought thinking mode.
+	ChatTemplateKwargs map[string]any `json:"chat_template_kwargs,omitempty"`
+	// Ollama 0.7+: disable thinking mode. Ignored by servers that don't support it.
+	Think              *bool          `json:"think,omitempty"`
 }
 
 type openAIMessage struct {
@@ -373,7 +383,9 @@ type openAIMessage struct {
 type openAIResponse struct {
 	Choices []struct {
 		Message struct {
-			Content string `json:"content"`
+			Content          string `json:"content"`
+			ReasoningContent string `json:"reasoning_content"` // DeepSeek-R1
+			Reasoning        string `json:"reasoning"`          // Qwen3 / vLLM
 		} `json:"message"`
 	} `json:"choices"`
 	Usage struct {
@@ -386,6 +398,7 @@ type openAIResponse struct {
 }
 
 func callOpenAICompat(ctx context.Context, cfg synthesisConfig, userPrompt string, maxTok int) (llmCallResult, error) {
+	noThink := false
 	body, err := json.Marshal(openAIRequest{
 		Model:     cfg.model,
 		MaxTokens: maxTok,
@@ -393,6 +406,8 @@ func callOpenAICompat(ctx context.Context, cfg synthesisConfig, userPrompt strin
 			{Role: "system", Content: "You are a concise technical writer. Output only the requested text."},
 			{Role: "user", Content: userPrompt},
 		},
+		ChatTemplateKwargs: map[string]any{"enable_thinking": false}, // vLLM
+		Think:              &noThink,                                  // Ollama 0.7+
 	})
 	if err != nil {
 		return llmCallResult{}, err
@@ -428,8 +443,21 @@ func callOpenAICompat(ctx context.Context, cfg synthesisConfig, userPrompt strin
 		return llmCallResult{}, fmt.Errorf("api error: %s", or.Error.Message)
 	}
 	if len(or.Choices) > 0 {
+		msg := or.Choices[0].Message
+		text := msg.Content
+		// Thinking models (Qwen3 / DeepSeek-R1) may return null content with the
+		// actual response in the reasoning field when thinking mode is active.
+		if strings.TrimSpace(text) == "" {
+			text = msg.ReasoningContent
+		}
+		if strings.TrimSpace(text) == "" {
+			text = msg.Reasoning
+		}
+		// llama.cpp embeds thinking inline as <think>...</think> in content.
+		// Strip those blocks so only the actual answer is stored.
+		text = strings.TrimSpace(thinkTagRe.ReplaceAllString(text, ""))
 		return llmCallResult{
-			text:         or.Choices[0].Message.Content,
+			text:         text,
 			inputTokens:  or.Usage.PromptTokens,
 			outputTokens: or.Usage.CompletionTokens,
 			latencyMs:    latencyMs,
