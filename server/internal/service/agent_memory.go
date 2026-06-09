@@ -877,6 +877,122 @@ reflection. Output only the reflection text, no preamble.`, issueTitle)
 	}
 }
 
+// MaybeRecordUserPreference detects whether a human comment reveals a preference
+// about how the agent should behave, and writes a user_preference memory if so.
+// Called asynchronously from maybeCapturePersonaSignal after signal capture.
+func MaybeRecordUserPreference(
+	ctx context.Context,
+	q *db.Queries,
+	agentID, workspaceID, userID pgtype.UUID,
+	userName, commentContent string,
+) {
+	cfg := resolveSynthesisConfig()
+	if cfg.backend == "" {
+		return
+	}
+
+	prompt := buildUserPreferencePrompt(userName, commentContent)
+	var res llmCallResult
+	var err error
+	switch cfg.backend {
+	case "anthropic":
+		res, err = callAnthropic(ctx, cfg, prompt, 256)
+	default:
+		res, err = callOpenAICompat(ctx, cfg, prompt, 256)
+	}
+	if err != nil {
+		slog.Debug("agent_memory: user preference detection failed", "error", err)
+		return
+	}
+	text := strings.TrimSpace(res.text)
+	if text == "" || text == "none" {
+		return
+	}
+
+	logPersonaLLMCall(ctx, q, "user_preference", agentID, workspaceID, cfg.backend, cfg.model, res)
+
+	mem, err := q.CreateAgentMemory(ctx, db.CreateAgentMemoryParams{
+		AgentID:            agentID,
+		WorkspaceID:        workspaceID,
+		Content:            text,
+		Category:           "user_preference",
+		Sentiment:          "neutral",
+		SourceUserID:       userID,
+		Importance:         0.7,
+		EmotionalValence:   0,
+		EmotionalIntensity: 0,
+		IsConsolidated:     false,
+		SourceCount:        1,
+	})
+	if err != nil {
+		slog.Warn("agent_memory: create user preference failed", "error", err)
+		return
+	}
+
+	vec := Embed(ctx, text)
+	if vec != nil {
+		_ = q.SetAgentMemoryEmbedding(ctx, db.SetAgentMemoryEmbeddingParams{
+			ID:        mem,
+			Embedding: pgvector.NewVector(vec),
+		})
+	}
+}
+
+// GetUserPreferenceContext returns a formatted markdown block of stored preferences
+// about a specific user, for injection into the task brief at claim time.
+func GetUserPreferenceContext(
+	ctx context.Context,
+	q *db.Queries,
+	agentID, userID pgtype.UUID,
+	userName string,
+) string {
+	rows, err := q.ListUserPreferenceMemories(ctx, db.ListUserPreferenceMemoriesParams{
+		AgentID:      agentID,
+		SourceUserID: userID,
+		Limit:        10,
+	})
+	if err != nil || len(rows) == 0 {
+		return ""
+	}
+
+	var b strings.Builder
+	displayName := userName
+	if displayName == "" {
+		displayName = "this user"
+	}
+	b.WriteString("## Preferences for ")
+	b.WriteString(displayName)
+	b.WriteString("\n\n")
+	b.WriteString("Based on past interactions, keep these preferences in mind:\n\n")
+	for _, r := range rows {
+		b.WriteString("- ")
+		b.WriteString(r.Content)
+		b.WriteString("\n")
+	}
+	return b.String()
+}
+
+func buildUserPreferencePrompt(userName, comment string) string {
+	name := userName
+	if name == "" {
+		name = "the user"
+	}
+	return fmt.Sprintf(`Analyze this comment from %s and determine whether it reveals a preference
+about how an AI agent should behave — communication style, level of detail, workflow habits,
+things to avoid, or similar behavioral expectations.
+
+Comment:
+%q
+
+If a clear preference is expressed, write ONE concise sentence from the agent's first-person
+perspective describing what %s prefers. Example: "%s prefers concise replies without
+trailing summaries."
+
+If the comment contains no preference signal, output exactly: none
+
+Output only the single sentence or "none". No preamble.`, name, comment, name, name)
+}
+
 // summarizeTaskFallback returns a simple template string when LLM is unavailable.
 func summarizeTaskFallback(issueTitle, outcomeType, triggerType string) string {
 	action := "completed"

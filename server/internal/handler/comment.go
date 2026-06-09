@@ -1815,16 +1815,26 @@ func (h *Handler) maybeCapturePersonaSignal(
 		if sigID.Valid {
 			go service.MaybeLLMUpgradeSignal(ctx, h.Queries, sigID, kwType, kwWeight, content)
 		}
-		return
+	} else {
+		// Keywords found nothing — try LLM async; record only if it finds a signal.
+		go func() {
+			llmType, llmWeight, llmOk := service.ClassifyCommentSignal(ctx, content)
+			if llmOk {
+				service.RecordCommentSignal(ctx, h.Queries, agentID, workspaceID,
+					llmType, llmWeight, content, commentID, userID)
+			}
+		}()
 	}
 
-	// Keywords found nothing — try LLM async; record only if it finds a signal.
+	// Independently detect user preference signals and persist them as memories.
 	go func() {
-		llmType, llmWeight, llmOk := service.ClassifyCommentSignal(ctx, content)
-		if llmOk {
-			service.RecordCommentSignal(ctx, h.Queries, agentID, workspaceID,
-				llmType, llmWeight, content, commentID, userID)
+		userName := ""
+		if userID.Valid {
+			if u, err := h.Queries.GetUser(ctx, userID); err == nil {
+				userName = u.Name
+			}
 		}
+		service.MaybeRecordUserPreference(ctx, h.Queries, agentID, workspaceID, userID, userName, content)
 	}()
 }
 

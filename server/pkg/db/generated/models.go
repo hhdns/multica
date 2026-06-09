@@ -79,6 +79,7 @@ type AgentMemory struct {
 	LastAccessedAt     pgtype.Timestamptz `json:"last_accessed_at"`
 	IsConsolidated     bool               `json:"is_consolidated"`
 	SourceCount        int32              `json:"source_count"`
+	SourceUserID       pgtype.UUID        `json:"source_user_id"`
 }
 
 type AgentPersona struct {

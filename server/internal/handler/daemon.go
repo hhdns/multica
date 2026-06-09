@@ -1722,6 +1722,27 @@ func (h *Handler) ClaimTaskByRuntime(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
+	// Inject stored user preferences about the task initiator into the memory
+	// context so the agent knows how to interact with this specific person.
+	// Only applies when both agent and a human initiator are known.
+	if resp.Agent != nil && resp.InitiatorType == "member" && resp.InitiatorID != "" {
+		initiatorUUID, err := util.ParseUUID(resp.InitiatorID)
+		if err == nil {
+			prefCtx := service.GetUserPreferenceContext(
+				r.Context(), h.Queries,
+				parseUUID(resp.Agent.ID), initiatorUUID,
+				resp.InitiatorName,
+			)
+			if prefCtx != "" {
+				if resp.Agent.MemoryContext == "" {
+					resp.Agent.MemoryContext = prefCtx
+				} else {
+					resp.Agent.MemoryContext = resp.Agent.MemoryContext + "\n\n" + prefCtx
+				}
+			}
+		}
+	}
+
 	// Workspace isolation check: the daemon uses this response's workspace_id
 	// as the only authority for MULTICA_WORKSPACE_ID in the agent env. An
 	// empty value would make the CLI silently fall back to the user-global

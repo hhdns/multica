@@ -40,10 +40,10 @@ func (q *Queries) CountAgentMemories(ctx context.Context, agentID pgtype.UUID) (
 const createAgentMemory = `-- name: CreateAgentMemory :one
 INSERT INTO agent_memory (
     agent_id, workspace_id, content, category, sentiment,
-    source_issue_id, source_task_id, importance,
+    source_issue_id, source_task_id, source_user_id, importance,
     emotional_valence, emotional_intensity,
     is_consolidated, source_count
-) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)
+) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13)
 RETURNING id
 `
 
@@ -55,6 +55,7 @@ type CreateAgentMemoryParams struct {
 	Sentiment          string      `json:"sentiment"`
 	SourceIssueID      pgtype.UUID `json:"source_issue_id"`
 	SourceTaskID       pgtype.UUID `json:"source_task_id"`
+	SourceUserID       pgtype.UUID `json:"source_user_id"`
 	Importance         float32     `json:"importance"`
 	EmotionalValence   float32     `json:"emotional_valence"`
 	EmotionalIntensity float32     `json:"emotional_intensity"`
@@ -71,6 +72,7 @@ func (q *Queries) CreateAgentMemory(ctx context.Context, arg CreateAgentMemoryPa
 		arg.Sentiment,
 		arg.SourceIssueID,
 		arg.SourceTaskID,
+		arg.SourceUserID,
 		arg.Importance,
 		arg.EmotionalValence,
 		arg.EmotionalIntensity,
@@ -352,6 +354,50 @@ func (q *Queries) ListMemoriesNeedingEmbedding(ctx context.Context, arg ListMemo
 	for rows.Next() {
 		var i ListMemoriesNeedingEmbeddingRow
 		if err := rows.Scan(&i.ID, &i.Content); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const listUserPreferenceMemories = `-- name: ListUserPreferenceMemories :many
+SELECT id, content, created_at
+FROM agent_memory
+WHERE agent_id = $1
+  AND source_user_id = $2
+  AND category = 'user_preference'
+ORDER BY created_at DESC
+LIMIT $3
+`
+
+type ListUserPreferenceMemoriesParams struct {
+	AgentID      pgtype.UUID `json:"agent_id"`
+	SourceUserID pgtype.UUID `json:"source_user_id"`
+	Limit        int32       `json:"limit"`
+}
+
+type ListUserPreferenceMemoriesRow struct {
+	ID        pgtype.UUID        `json:"id"`
+	Content   string             `json:"content"`
+	CreatedAt pgtype.Timestamptz `json:"created_at"`
+}
+
+// Returns an agent's stored preferences about a specific user, newest first.
+// Used to inject into the runtime brief when the task initiator is known.
+func (q *Queries) ListUserPreferenceMemories(ctx context.Context, arg ListUserPreferenceMemoriesParams) ([]ListUserPreferenceMemoriesRow, error) {
+	rows, err := q.db.Query(ctx, listUserPreferenceMemories, arg.AgentID, arg.SourceUserID, arg.Limit)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []ListUserPreferenceMemoriesRow{}
+	for rows.Next() {
+		var i ListUserPreferenceMemoriesRow
+		if err := rows.Scan(&i.ID, &i.Content, &i.CreatedAt); err != nil {
 			return nil, err
 		}
 		items = append(items, i)

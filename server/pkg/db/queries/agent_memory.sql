@@ -1,10 +1,10 @@
 -- name: CreateAgentMemory :one
 INSERT INTO agent_memory (
     agent_id, workspace_id, content, category, sentiment,
-    source_issue_id, source_task_id, importance,
+    source_issue_id, source_task_id, source_user_id, importance,
     emotional_valence, emotional_intensity,
     is_consolidated, source_count
-) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)
+) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13)
 RETURNING id;
 
 -- name: SetAgentMemoryEmbedding :exec
@@ -144,3 +144,14 @@ WHERE target.agent_id = $1
     ) r
     WHERE r.rn > r.cat_limit
 );
+
+-- name: ListUserPreferenceMemories :many
+-- Returns an agent's stored preferences about a specific user, newest first.
+-- Used to inject into the runtime brief when the task initiator is known.
+SELECT id, content, created_at
+FROM agent_memory
+WHERE agent_id = $1
+  AND source_user_id = $2
+  AND category = 'user_preference'
+ORDER BY created_at DESC
+LIMIT $3;
