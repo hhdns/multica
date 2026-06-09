@@ -1,7 +1,7 @@
 "use client";
 
 import { useCallback, useState } from "react";
-import { Loader2, Save, Sparkles, ThumbsUp, ThumbsDown, Plus, X, Wand2, Brain, ChevronDown, ChevronRight, Cpu, Activity, UserRound, Download, Upload, Pencil, Trash2, Check, RefreshCw } from "lucide-react";
+import { Loader2, Save, Sparkles, ThumbsUp, ThumbsDown, Plus, X, Wand2, ChevronDown, ChevronRight, Download, Upload, Pencil, Trash2, Check, RefreshCw } from "lucide-react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import type { Agent, AgentPersona, AgentMemory, PersonaLLMCall, UpdateAgentPersonaRequest } from "@multica/core/types";
 import { api } from "@multica/core/api";
@@ -260,11 +260,10 @@ export function PersonaTab({ agent, canEdit }: PersonaTabProps) {
         backendConfigured={personaSynthesisBackend !== ""}
       />
       {persona.recent_signals.length > 0 && <SignalsSection persona={persona} />}
+      <MemoriesSection agentId={agent.id} canEdit={canEdit} />
       <EpisodeRecallSection persona={persona} canEdit={canEdit} onSave={(data) => mutation.mutate(data)} saving={mutation.isPending} />
-      <div className="flex flex-col gap-2">
-        <MemoriesSection agentId={agent.id} workspaceId={agent.workspace_id} canEdit={canEdit} />
-        <LLMCallsSection agentId={agent.id} />
-      </div>
+      <EmbeddingsSection workspaceId={agent.workspace_id} canEdit={canEdit} />
+      <LLMCallsSection agentId={agent.id} />
     </div>
   );
 }
@@ -820,26 +819,86 @@ function MemoryRow({
   );
 }
 
-function MemoriesSection({
-  agentId,
-  workspaceId,
-  canEdit,
-}: {
-  agentId: string;
-  workspaceId: string;
-  canEdit: boolean;
-}) {
+function MemoriesSection({ agentId, canEdit }: { agentId: string; canEdit: boolean }) {
   const [open, setOpen] = useState(false);
   const [prefOpen, setPrefOpen] = useState(false);
-  const [lastRebuiltAt, setLastRebuiltAt] = useState<Date | null>(null);
-  const embeddingModelStale = useConfigStore((s) => s.embeddingModelStale);
-  const setEmbeddingModelStale = useConfigStore((s) => s.setEmbeddingModelStale);
 
   const { data: memories, isLoading } = useQuery({
     queryKey: ["agent-memories", agentId],
     queryFn: () => api.listAgentMemories(agentId),
     enabled: open || prefOpen,
   });
+
+  const episodicMemories = memories?.filter((m: AgentMemory) => m.category !== "user_preference");
+  const preferenceMemories = memories?.filter((m: AgentMemory) => m.category === "user_preference");
+
+  return (
+    <div className="flex flex-col gap-6">
+      <div className="flex flex-col gap-2">
+        <button
+          className="flex w-full items-center text-xs font-semibold uppercase tracking-wide text-muted-foreground hover:text-foreground"
+          onClick={() => setOpen((v) => !v)}
+        >
+          Episodic Memory
+          {open ? <ChevronDown className="ml-auto h-3 w-3" /> : <ChevronRight className="ml-auto h-3 w-3" />}
+        </button>
+        <p className="text-xs text-muted-foreground">
+          Long-term memories built from task outcomes, learnings, and experiences.{" "}
+          <span className="text-foreground/50">Recalled semantically at the start of each task.</span>
+        </p>
+        {open && (
+          <div className="flex flex-col rounded-lg border">
+            {isLoading && (
+              <div className="flex items-center justify-center py-6">
+                <Loader2 className="h-4 w-4 animate-spin text-muted-foreground" />
+              </div>
+            )}
+            {!isLoading && (!episodicMemories || episodicMemories.length === 0) && (
+              <p className="px-3 py-4 text-xs text-muted-foreground">No memories yet. Memories are recorded automatically after tasks complete.</p>
+            )}
+            {episodicMemories && episodicMemories.length > 0 && episodicMemories.map((m: AgentMemory) => (
+              <MemoryRow key={m.id} memory={m} agentId={agentId} canEdit={canEdit} showSentiment />
+            ))}
+          </div>
+        )}
+      </div>
+
+      <div className="flex flex-col gap-2">
+        <button
+          className="flex w-full items-center text-xs font-semibold uppercase tracking-wide text-muted-foreground hover:text-foreground"
+          onClick={() => setPrefOpen((v) => !v)}
+        >
+          User Preferences
+          {prefOpen ? <ChevronDown className="ml-auto h-3 w-3" /> : <ChevronRight className="ml-auto h-3 w-3" />}
+        </button>
+        <p className="text-xs text-muted-foreground">
+          Learned working styles and preferences per workspace member.{" "}
+          <span className="text-foreground/50">Surfaced when the agent interacts with a specific user.</span>
+        </p>
+        {prefOpen && (
+          <div className="flex flex-col rounded-lg border">
+            {isLoading && (
+              <div className="flex items-center justify-center py-6">
+                <Loader2 className="h-4 w-4 animate-spin text-muted-foreground" />
+              </div>
+            )}
+            {!isLoading && (!preferenceMemories || preferenceMemories.length === 0) && (
+              <p className="px-3 py-4 text-xs text-muted-foreground">No user preferences recorded yet. Preferences are learned from interactions with workspace members.</p>
+            )}
+            {preferenceMemories && preferenceMemories.length > 0 && preferenceMemories.map((m: AgentMemory) => (
+              <MemoryRow key={m.id} memory={m} agentId={agentId} canEdit={canEdit} showSentiment={false} />
+            ))}
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}
+
+function EmbeddingsSection({ workspaceId, canEdit }: { workspaceId: string; canEdit: boolean }) {
+  const [lastRebuiltAt, setLastRebuiltAt] = useState<Date | null>(null);
+  const embeddingModelStale = useConfigStore((s) => s.embeddingModelStale);
+  const setEmbeddingModelStale = useConfigStore((s) => s.setEmbeddingModelStale);
 
   const rebuild = useMutation({
     mutationFn: () => api.rebuildWorkspaceEmbeddings(workspaceId),
@@ -852,101 +911,43 @@ function MemoriesSection({
     setEmbeddingModelStale(false);
   });
 
-  const episodicMemories = memories?.filter((m: AgentMemory) => m.category !== "user_preference");
-  const preferenceMemories = memories?.filter((m: AgentMemory) => m.category === "user_preference");
-
   return (
     <div className="flex flex-col gap-2">
-      {/* Embeddings — always-visible header with rebuild action */}
-      <div className="flex flex-col gap-2 rounded-lg border px-3 py-3">
-        <div className="flex items-center gap-2">
-          <Cpu className="h-3.5 w-3.5 text-muted-foreground" />
-          <span className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">Embeddings</span>
-          {canEdit && (
-            <Button
-              size="sm"
-              variant={rebuild.isError ? "destructive" : "outline"}
-              className="ml-auto shrink-0"
-              disabled={rebuild.isPending || rebuild.isSuccess}
-              onClick={() => rebuild.mutate()}
-            >
-              {rebuild.isPending ? (
-                <Loader2 className="mr-1.5 h-3.5 w-3.5 animate-spin" />
-              ) : (
-                <RefreshCw className="mr-1.5 h-3.5 w-3.5" />
-              )}
-              {rebuild.isPending ? "Rebuilding…" : rebuild.isSuccess ? "Queued" : rebuild.isError ? "Failed — retry?" : "Rebuild"}
-            </Button>
+      <SectionTitle>Embeddings</SectionTitle>
+      {embeddingModelStale && canEdit && (
+        <p className="rounded-md border border-amber-200 bg-amber-50 px-3 py-2 text-[11px] text-amber-800 dark:border-amber-800/40 dark:bg-amber-950/30 dark:text-amber-400">
+          Embedding model changed — existing vectors are stale and recall may be inaccurate.
+        </p>
+      )}
+      <div className="flex items-center gap-3 rounded-lg border bg-muted/30 px-4 py-3">
+        <div className="min-w-0 flex-1">
+          <p className="text-xs text-foreground">
+            Each memory carries a vector embedding used for semantic recall during tasks.{" "}
+            <span className="text-muted-foreground">Rebuild if you changed the embedding model or imported memories from another instance.</span>
+          </p>
+          {lastRebuiltAt ? (
+            <p className="mt-0.5 text-[10px] text-muted-foreground">Last rebuilt: {lastRebuiltAt.toLocaleTimeString()}</p>
+          ) : (
+            <p className="mt-0.5 text-[10px] text-muted-foreground">Runs in the background — refresh the page after a minute to see updated results.</p>
           )}
         </div>
-        <p className="text-xs text-muted-foreground">
-          Each memory carries a vector embedding used for semantic recall during tasks. Rebuild if you
-          changed the embedding model or imported memories from another instance.{" "}
-          <span className="text-foreground/50">
-            Runs in the background — refresh the page after a minute to see updated results.
-          </span>
-        </p>
-        {embeddingModelStale && canEdit && (
-          <p className="text-[11px] text-amber-600 dark:text-amber-400">
-            Embedding model changed — existing vectors are stale and recall may be inaccurate.
-          </p>
-        )}
-        {lastRebuiltAt && (
-          <p className="text-[10px] text-muted-foreground/60">
-            Last rebuild completed at {lastRebuiltAt.toLocaleTimeString()}
-          </p>
+        {canEdit && (
+          <Button
+            size="sm"
+            variant={rebuild.isError ? "destructive" : "outline"}
+            className="shrink-0"
+            disabled={rebuild.isPending || rebuild.isSuccess}
+            onClick={() => rebuild.mutate()}
+          >
+            {rebuild.isPending ? (
+              <Loader2 className="mr-1.5 h-3.5 w-3.5 animate-spin" />
+            ) : (
+              <RefreshCw className="mr-1.5 h-3.5 w-3.5" />
+            )}
+            {rebuild.isPending ? "Rebuilding…" : rebuild.isSuccess ? "Queued" : rebuild.isError ? "Failed — retry?" : "Rebuild"}
+          </Button>
         )}
       </div>
-
-      {/* Episodic Memory */}
-      <button
-        className="flex items-center gap-2 text-xs font-semibold uppercase tracking-wide text-muted-foreground hover:text-foreground"
-        onClick={() => setOpen((v) => !v)}
-      >
-        <Brain className="h-3.5 w-3.5" />
-        Episodic Memory
-        {open ? <ChevronDown className="ml-auto h-3 w-3" /> : <ChevronRight className="ml-auto h-3 w-3" />}
-      </button>
-      {open && (
-        <div className="flex flex-col rounded-lg border">
-          {isLoading && (
-            <div className="flex items-center justify-center py-6">
-              <Loader2 className="h-4 w-4 animate-spin text-muted-foreground" />
-            </div>
-          )}
-          {!isLoading && (!episodicMemories || episodicMemories.length === 0) && (
-            <p className="px-3 py-4 text-xs text-muted-foreground">No memories yet. Memories are recorded automatically after tasks complete.</p>
-          )}
-          {episodicMemories && episodicMemories.length > 0 && episodicMemories.map((m: AgentMemory) => (
-            <MemoryRow key={m.id} memory={m} agentId={agentId} canEdit={canEdit} showSentiment />
-          ))}
-        </div>
-      )}
-
-      {/* User Preferences */}
-      <button
-        className="flex items-center gap-2 text-xs font-semibold uppercase tracking-wide text-muted-foreground hover:text-foreground"
-        onClick={() => setPrefOpen((v) => !v)}
-      >
-        <UserRound className="h-3.5 w-3.5" />
-        User Preferences
-        {prefOpen ? <ChevronDown className="ml-auto h-3 w-3" /> : <ChevronRight className="ml-auto h-3 w-3" />}
-      </button>
-      {prefOpen && (
-        <div className="flex flex-col rounded-lg border">
-          {isLoading && (
-            <div className="flex items-center justify-center py-6">
-              <Loader2 className="h-4 w-4 animate-spin text-muted-foreground" />
-            </div>
-          )}
-          {!isLoading && (!preferenceMemories || preferenceMemories.length === 0) && (
-            <p className="px-3 py-4 text-xs text-muted-foreground">No user preferences recorded yet. Preferences are learned from interactions with workspace members.</p>
-          )}
-          {preferenceMemories && preferenceMemories.length > 0 && preferenceMemories.map((m: AgentMemory) => (
-            <MemoryRow key={m.id} memory={m} agentId={agentId} canEdit={canEdit} showSentiment={false} />
-          ))}
-        </div>
-      )}
     </div>
   );
 }
@@ -1019,18 +1020,18 @@ function LLMCallsSection({ agentId }: { agentId: string }) {
   return (
     <div className="flex flex-col gap-2">
       <button
-        className="flex items-center gap-2 text-xs font-semibold uppercase tracking-wide text-muted-foreground hover:text-foreground"
+        className="flex w-full items-center text-xs font-semibold uppercase tracking-wide text-muted-foreground hover:text-foreground"
         onClick={() => setOpen((v) => !v)}
       >
-        <Activity className="h-3.5 w-3.5" />
         LLM Token Usage
         {open ? <ChevronDown className="ml-auto h-3 w-3" /> : <ChevronRight className="ml-auto h-3 w-3" />}
       </button>
+      <p className="text-xs text-muted-foreground">
+        Token usage from persona background processes: signal classification, instruction synthesis, memory compaction, and episode summaries.{" "}
+        <span className="text-foreground/50">Does not include tokens used by the agent during task execution.</span>
+      </p>
       {open && (
         <div className="flex flex-col rounded-lg border">
-          <p className="border-b px-3 py-2 text-[10px] text-muted-foreground">
-            Token usage from persona background processes: signal classification, instruction synthesis, memory compaction, and episode summaries. Does not include tokens used by the agent during task execution.
-          </p>
           {isLoading && (
             <div className="flex items-center justify-center py-6">
               <Loader2 className="h-4 w-4 animate-spin text-muted-foreground" />
@@ -1090,7 +1091,7 @@ function LLMCallsSection({ agentId }: { agentId: string }) {
 
 function SignalsSection({ persona }: { persona: AgentPersona }) {
   return (
-    <div className="flex flex-col gap-2 pb-4">
+    <div className="flex flex-col gap-2">
       <SectionTitle>Recent Feedback Signals</SectionTitle>
       <div className="flex flex-col divide-y rounded-lg border">
         {persona.recent_signals.slice(0, 10).map((signal) => (
