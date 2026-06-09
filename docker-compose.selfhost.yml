@@ -158,6 +158,8 @@ services:
         wait
     environment:
       PERSONA_EMBEDDING_MODEL: ${PERSONA_EMBEDDING_MODEL:-nomic-embed-text}
+      OLLAMA_NUM_PARALLEL: ${OLLAMA_NUM_PARALLEL:-4}
+      OLLAMA_MAX_QUEUE: ${OLLAMA_MAX_QUEUE:-16}
     volumes:
       - embeddings_cache:/root/.ollama
     restart: unless-stopped
