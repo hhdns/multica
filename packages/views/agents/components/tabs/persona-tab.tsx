@@ -611,6 +611,11 @@ function SynthesizeSection({
   );
 }
 
+function fmtDatetime(s: string | Date): string {
+  const d = typeof s === "string" ? new Date(s) : s;
+  return d.toLocaleString(undefined, { month: "short", day: "numeric", hour: "2-digit", minute: "2-digit" });
+}
+
 const SENTIMENT_COLORS: Record<string, string> = {
   positive: "text-emerald-500",
   negative: "text-rose-500",
@@ -711,7 +716,7 @@ function MemoriesSection({
                 <div className="mt-0.5 flex items-center gap-2 text-[10px] text-muted-foreground">
                   <span className="capitalize">{m.category.replace(/_/g, " ")}</span>
                   <span>·</span>
-                  <span>{new Date(m.created_at).toLocaleDateString()}</span>
+                  <span>{fmtDatetime(m.created_at)}</span>
                   {m.has_embedding && <span className="rounded bg-muted px-1 py-px font-mono">vec</span>}
                   {m.is_consolidated && m.source_count > 1 && (
                     <span className="rounded bg-violet-100 px-1 py-px text-violet-700 dark:bg-violet-950/50 dark:text-violet-400">
@@ -748,7 +753,7 @@ function MemoriesSection({
               <div className="min-w-0 flex-1">
                 <p className="text-xs text-foreground">{m.content}</p>
                 <div className="mt-0.5 flex items-center gap-2 text-[10px] text-muted-foreground">
-                  <span>{new Date(m.created_at).toLocaleDateString()}</span>
+                  <span>{fmtDatetime(m.created_at)}</span>
                   {m.has_embedding && <span className="rounded bg-muted px-1 py-px font-mono">vec</span>}
                 </div>
               </div>
@@ -816,8 +821,49 @@ const CALL_TYPE_LABELS: Record<string, string> = {
   breakthrough_impression: "Breakthrough",
 };
 
+type AggView = "calls" | "day" | "week" | "month";
+
+const AGG_VIEW_LABELS: Record<AggView, string> = {
+  calls: "Calls",
+  day: "Daily",
+  week: "Weekly",
+  month: "Monthly",
+};
+
+function groupByPeriod(calls: PersonaLLMCall[], by: "day" | "week" | "month") {
+  const groups = new Map<string, { label: string; count: number; inputTokens: number; outputTokens: number }>();
+  for (const c of calls) {
+    const d = new Date(c.created_at);
+    let key: string;
+    let label: string;
+    if (by === "day") {
+      key = d.toISOString().slice(0, 10);
+      label = d.toLocaleString(undefined, { month: "short", day: "numeric" });
+    } else if (by === "week") {
+      const mon = new Date(d);
+      mon.setDate(d.getDate() - ((d.getDay() + 6) % 7));
+      mon.setHours(0, 0, 0, 0);
+      const sun = new Date(mon);
+      sun.setDate(mon.getDate() + 6);
+      key = mon.toISOString().slice(0, 10);
+      const fmt = (dt: Date) => dt.toLocaleString(undefined, { month: "short", day: "numeric" });
+      label = `${fmt(mon)} – ${fmt(sun)}`;
+    } else {
+      key = d.toISOString().slice(0, 7);
+      label = d.toLocaleString(undefined, { month: "short", year: "numeric" });
+    }
+    const g = groups.get(key) ?? { label, count: 0, inputTokens: 0, outputTokens: 0 };
+    g.count++;
+    g.inputTokens += c.input_tokens;
+    g.outputTokens += c.output_tokens;
+    groups.set(key, g);
+  }
+  return Array.from(groups.values());
+}
+
 function LLMCallsSection({ agentId }: { agentId: string }) {
   const [open, setOpen] = useState(false);
+  const [view, setView] = useState<AggView>("calls");
 
   const { data: calls, isLoading } = useQuery({
     queryKey: ["agent-llm-calls", agentId],
@@ -827,6 +873,7 @@ function LLMCallsSection({ agentId }: { agentId: string }) {
 
   const totalIn = calls?.reduce((s, c) => s + c.input_tokens, 0) ?? 0;
   const totalOut = calls?.reduce((s, c) => s + c.output_tokens, 0) ?? 0;
+  const grouped = calls && view !== "calls" ? groupByPeriod(calls, view) : null;
 
   return (
     <div className="flex flex-col gap-2">
@@ -850,27 +897,42 @@ function LLMCallsSection({ agentId }: { agentId: string }) {
           )}
           {calls && calls.length > 0 && (
             <>
-              <div className="flex items-center gap-4 border-b px-3 py-2 text-[10px] text-muted-foreground">
-                <span>Last {calls.length} calls</span>
-                <span className="ml-auto tabular-nums">
-                  {(totalIn + totalOut).toLocaleString()} tokens total
-                  <span className="ml-2 opacity-70">({totalIn.toLocaleString()} in / {totalOut.toLocaleString()} out)</span>
+              <div className="flex items-center gap-3 border-b px-3 py-2">
+                <span className="text-[10px] tabular-nums text-muted-foreground">
+                  {(totalIn + totalOut).toLocaleString()} tokens
+                  <span className="ml-1.5 opacity-60">({totalIn.toLocaleString()} in / {totalOut.toLocaleString()} out)</span>
                 </span>
+                <div className="ml-auto flex gap-0.5">
+                  {(["calls", "day", "week", "month"] as const).map((v) => (
+                    <button
+                      key={v}
+                      onClick={() => setView(v)}
+                      className={`rounded px-2 py-0.5 text-[10px] transition-colors ${view === v ? "bg-accent text-accent-foreground" : "text-muted-foreground hover:text-foreground"}`}
+                    >
+                      {AGG_VIEW_LABELS[v]}
+                    </button>
+                  ))}
+                </div>
               </div>
-              {calls.map((c: PersonaLLMCall, i: number) => (
+              {view === "calls" && calls.map((c: PersonaLLMCall, i: number) => (
                 <div key={i} className="flex items-center gap-2.5 border-b px-3 py-2 last:border-b-0">
                   <span className="w-24 shrink-0 text-[10px] font-medium text-muted-foreground">
                     {CALL_TYPE_LABELS[c.call_type] ?? c.call_type}
                   </span>
-                  <span className="min-w-0 flex-1 truncate text-[10px] text-foreground/70 font-mono">{c.model}</span>
+                  <span className="min-w-0 flex-1 truncate font-mono text-[10px] text-foreground/70">{c.model}</span>
                   <span className="shrink-0 tabular-nums text-[10px] text-muted-foreground">
                     {c.input_tokens.toLocaleString()}↑ {c.output_tokens.toLocaleString()}↓
                   </span>
-                  <span className="shrink-0 text-[10px] text-muted-foreground/60">
-                    {c.latency_ms}ms
-                  </span>
-                  <span className="shrink-0 text-[10px] text-muted-foreground/50">
-                    {new Date(c.created_at).toLocaleDateString()}
+                  <span className="shrink-0 text-[10px] text-muted-foreground/60">{c.latency_ms}ms</span>
+                  <span className="shrink-0 text-[10px] text-muted-foreground/50">{fmtDatetime(c.created_at)}</span>
+                </div>
+              ))}
+              {grouped && grouped.map((g, i) => (
+                <div key={i} className="flex items-center gap-2.5 border-b px-3 py-2 last:border-b-0">
+                  <span className="min-w-0 flex-1 text-[10px] font-medium text-foreground">{g.label}</span>
+                  <span className="shrink-0 text-[10px] text-muted-foreground/60">{g.count} calls</span>
+                  <span className="shrink-0 tabular-nums text-[10px] text-muted-foreground">
+                    {g.inputTokens.toLocaleString()}↑ {g.outputTokens.toLocaleString()}↓
                   </span>
                 </div>
               ))}
@@ -893,7 +955,7 @@ function SignalsSection({ persona }: { persona: AgentPersona }) {
             <div className="min-w-0 flex-1">
               <p className="truncate text-xs text-foreground">{signal.content}</p>
               <p className="mt-0.5 text-[10px] text-muted-foreground capitalize">
-                {signal.type.replace(/_/g, " ")} · {new Date(signal.created_at).toLocaleDateString()}
+                {signal.type.replace(/_/g, " ")} · {fmtDatetime(signal.created_at)}
               </p>
             </div>
             <span className="shrink-0 text-[10px] tabular-nums text-muted-foreground">
