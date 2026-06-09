@@ -10,6 +10,7 @@ import (
 
 	"github.com/go-chi/chi/v5"
 	"github.com/jackc/pgx/v5/pgtype"
+	pgvector "github.com/pgvector/pgvector-go"
 
 	"github.com/multica-ai/multica/server/internal/logger"
 	"github.com/multica-ai/multica/server/internal/service"
@@ -381,6 +382,86 @@ func (h *Handler) ListAgentMemories(w http.ResponseWriter, r *http.Request) {
 		out = append(out, r2)
 	}
 	writeJSON(w, http.StatusOK, out)
+}
+
+// DeleteAgentMemory handles DELETE /api/agents/{id}/memories/{memoryId}.
+func (h *Handler) DeleteAgentMemory(w http.ResponseWriter, r *http.Request) {
+	agentID := chi.URLParam(r, "id")
+	agent, ok := h.loadAgentForUser(w, r, agentID)
+	if !ok {
+		return
+	}
+	memoryID := chi.URLParam(r, "memoryId")
+	memUUID, ok := parseUUIDOrBadRequest(w, memoryID, "memoryId")
+	if !ok {
+		return
+	}
+	if err := h.Queries.DeleteAgentMemory(r.Context(), db.DeleteAgentMemoryParams{
+		ID:      memUUID,
+		AgentID: agent.ID,
+	}); err != nil {
+		slog.Warn("delete agent memory: query failed", "error", err, "memory_id", memoryID)
+		writeError(w, http.StatusInternalServerError, "failed to delete memory")
+		return
+	}
+	w.WriteHeader(http.StatusNoContent)
+}
+
+// UpdateAgentMemory handles PATCH /api/agents/{id}/memories/{memoryId}.
+// Accepts {"content": "..."} and replaces the memory text, clearing the
+// embedding so it is regenerated on next rebuild.
+func (h *Handler) UpdateAgentMemory(w http.ResponseWriter, r *http.Request) {
+	agentID := chi.URLParam(r, "id")
+	agent, ok := h.loadAgentForUser(w, r, agentID)
+	if !ok {
+		return
+	}
+	memoryID := chi.URLParam(r, "memoryId")
+	memUUID, ok := parseUUIDOrBadRequest(w, memoryID, "memoryId")
+	if !ok {
+		return
+	}
+
+	var req struct {
+		Content string `json:"content"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeError(w, http.StatusBadRequest, "invalid request body")
+		return
+	}
+	req.Content = strings.TrimSpace(req.Content)
+	if req.Content == "" {
+		writeError(w, http.StatusBadRequest, "content must not be empty")
+		return
+	}
+
+	if err := h.Queries.UpdateAgentMemoryContent(r.Context(), db.UpdateAgentMemoryContentParams{
+		ID:      memUUID,
+		AgentID: agent.ID,
+		Content: req.Content,
+	}); err != nil {
+		slog.Warn("update agent memory: query failed", "error", err, "memory_id", memoryID)
+		writeError(w, http.StatusInternalServerError, "failed to update memory")
+		return
+	}
+
+	// Re-embed the updated content so the memory continues to participate in
+	// semantic search. Runs in a goroutine so the HTTP response is not delayed.
+	content := req.Content
+	go func() {
+		vec := service.Embed(context.Background(), content)
+		if vec == nil {
+			return
+		}
+		if err := h.Queries.SetAgentMemoryEmbedding(context.Background(), db.SetAgentMemoryEmbeddingParams{
+			ID:        memUUID,
+			Embedding: pgvector.NewVector(vec),
+		}); err != nil {
+			slog.Debug("update agent memory: re-embed failed", "memory_id", memoryID, "error", err)
+		}
+	}()
+
+	w.WriteHeader(http.StatusNoContent)
 }
 
 // PersonaLLMCallResponse is the wire shape for a single LLM call record.

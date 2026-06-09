@@ -877,6 +877,10 @@ func NewRouterWithOptions(pool *pgxpool.Pool, hub *realtime.Hub, bus *events.Bus
 					r.Get("/persona/export", h.ExportAgentPersona)
 					r.Post("/persona/import", h.ImportAgentPersona)
 					r.Get("/memories", h.ListAgentMemories)
+					r.Route("/memories/{memoryId}", func(r chi.Router) {
+						r.Delete("/", h.DeleteAgentMemory)
+						r.Patch("/", h.UpdateAgentMemory)
+					})
 					r.Get("/llm-calls", h.ListAgentLLMCalls)
 				})
 			})

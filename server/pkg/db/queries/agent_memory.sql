@@ -191,3 +191,16 @@ SELECT id, content, created_at FROM agent_memory
 WHERE agent_id = $1 AND category = 'conversation_episode'
 ORDER BY created_at DESC
 LIMIT $2;
+
+-- name: DeleteAgentMemory :exec
+-- Deletes a single memory. agent_id is required so the query is a no-op
+-- if the memory doesn't belong to this agent (defense in depth on top of
+-- the handler's loadAgentForUser ownership check).
+DELETE FROM agent_memory WHERE id = $1 AND agent_id = $2;
+
+-- name: UpdateAgentMemoryContent :exec
+-- Replaces the text content of a memory. Clears the embedding so it is
+-- regenerated with the updated text on the next rebuild.
+UPDATE agent_memory
+SET content = $3, embedding = NULL
+WHERE id = $1 AND agent_id = $2;

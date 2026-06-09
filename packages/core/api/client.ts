@@ -918,6 +918,17 @@ export class ApiClient {
     return this.fetch(`/api/agents/${id}/memories`);
   }
 
+  async deleteAgentMemory(agentId: string, memoryId: string): Promise<void> {
+    return this.fetch(`/api/agents/${agentId}/memories/${memoryId}`, { method: "DELETE" });
+  }
+
+  async updateAgentMemory(agentId: string, memoryId: string, content: string): Promise<void> {
+    return this.fetch(`/api/agents/${agentId}/memories/${memoryId}`, {
+      method: "PATCH",
+      body: JSON.stringify({ content }),
+    });
+  }
+
   async listAgentLLMCalls(id: string): Promise<import("../types").PersonaLLMCall[]> {
     return this.fetch(`/api/agents/${id}/llm-calls`);
   }

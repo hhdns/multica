@@ -104,6 +104,23 @@ func (q *Queries) CreateAgentMemory(ctx context.Context, arg CreateAgentMemoryPa
 	return id, err
 }
 
+const deleteAgentMemory = `-- name: DeleteAgentMemory :exec
+DELETE FROM agent_memory WHERE id = $1 AND agent_id = $2
+`
+
+type DeleteAgentMemoryParams struct {
+	ID      pgtype.UUID `json:"id"`
+	AgentID pgtype.UUID `json:"agent_id"`
+}
+
+// Deletes a single memory. agent_id is required so the query is a no-op
+// if the memory doesn't belong to this agent (defense in depth on top of
+// the handler's loadAgentForUser ownership check).
+func (q *Queries) DeleteAgentMemory(ctx context.Context, arg DeleteAgentMemoryParams) error {
+	_, err := q.db.Exec(ctx, deleteAgentMemory, arg.ID, arg.AgentID)
+	return err
+}
+
 const deleteMemoriesByIDs = `-- name: DeleteMemoriesByIDs :exec
 DELETE FROM agent_memory WHERE id = ANY($1::uuid[])
 `
@@ -655,5 +672,24 @@ type SetAgentMemoryEmbeddingParams struct {
 
 func (q *Queries) SetAgentMemoryEmbedding(ctx context.Context, arg SetAgentMemoryEmbeddingParams) error {
 	_, err := q.db.Exec(ctx, setAgentMemoryEmbedding, arg.ID, arg.Embedding)
+	return err
+}
+
+const updateAgentMemoryContent = `-- name: UpdateAgentMemoryContent :exec
+UPDATE agent_memory
+SET content = $3, embedding = NULL
+WHERE id = $1 AND agent_id = $2
+`
+
+type UpdateAgentMemoryContentParams struct {
+	ID      pgtype.UUID `json:"id"`
+	AgentID pgtype.UUID `json:"agent_id"`
+	Content string      `json:"content"`
+}
+
+// Replaces the text content of a memory. Clears the embedding so it is
+// regenerated with the updated text on the next rebuild.
+func (q *Queries) UpdateAgentMemoryContent(ctx context.Context, arg UpdateAgentMemoryContentParams) error {
+	_, err := q.db.Exec(ctx, updateAgentMemoryContent, arg.ID, arg.AgentID, arg.Content)
 	return err
 }

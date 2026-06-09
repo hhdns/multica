@@ -1,7 +1,7 @@
 "use client";
 
 import { useCallback, useState } from "react";
-import { Loader2, Save, Sparkles, ThumbsUp, ThumbsDown, Plus, X, Wand2, Brain, ChevronDown, ChevronRight, Cpu, UserRound, Download, Upload } from "lucide-react";
+import { Loader2, Save, Sparkles, ThumbsUp, ThumbsDown, Plus, X, Wand2, Brain, ChevronDown, ChevronRight, Cpu, UserRound, Download, Upload, Pencil, Trash2, Check } from "lucide-react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import type { Agent, AgentPersona, AgentMemory, PersonaLLMCall, UpdateAgentPersonaRequest } from "@multica/core/types";
 import { api } from "@multica/core/api";
@@ -679,6 +679,147 @@ const SENTIMENT_LABELS: Record<string, string> = {
   neutral: "·",
 };
 
+function MemoryRow({
+  memory,
+  agentId,
+  canEdit,
+  showSentiment,
+}: {
+  memory: AgentMemory;
+  agentId: string;
+  canEdit: boolean;
+  showSentiment: boolean;
+}) {
+  const qc = useQueryClient();
+  const [editing, setEditing] = useState(false);
+  const [draft, setDraft] = useState(memory.content);
+  const [confirmDelete, setConfirmDelete] = useState(false);
+
+  const del = useMutation({
+    mutationFn: () => api.deleteAgentMemory(agentId, memory.id),
+    onSuccess: () => qc.invalidateQueries({ queryKey: ["agent-memories", agentId] }),
+  });
+
+  const update = useMutation({
+    mutationFn: (content: string) => api.updateAgentMemory(agentId, memory.id, content),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ["agent-memories", agentId] });
+      setEditing(false);
+    },
+  });
+
+  const handleSave = () => {
+    const trimmed = draft.trim();
+    if (trimmed && trimmed !== memory.content) {
+      update.mutate(trimmed);
+    } else {
+      setEditing(false);
+    }
+  };
+
+  const handleCancelEdit = () => {
+    setDraft(memory.content);
+    setEditing(false);
+  };
+
+  return (
+    <div className="group flex items-start gap-2.5 border-b px-3 py-2.5 last:border-b-0">
+      {showSentiment && (
+        <span className={`mt-0.5 shrink-0 text-xs font-bold ${SENTIMENT_COLORS[memory.sentiment]}`}>
+          {SENTIMENT_LABELS[memory.sentiment]}
+        </span>
+      )}
+      <div className="min-w-0 flex-1">
+        {editing ? (
+          <div className="flex flex-col gap-1.5">
+            <Textarea
+              className="resize-none text-xs"
+              rows={3}
+              value={draft}
+              onChange={(e) => setDraft(e.target.value)}
+              autoFocus
+            />
+            <div className="flex items-center gap-1.5">
+              <Button size="sm" onClick={handleSave} disabled={update.isPending}>
+                {update.isPending ? <Loader2 className="mr-1.5 h-3.5 w-3.5 animate-spin" /> : <Save className="mr-1.5 h-3.5 w-3.5" />}
+                Save
+              </Button>
+              <Button size="sm" variant="ghost" onClick={handleCancelEdit} disabled={update.isPending}>
+                Cancel
+              </Button>
+              {update.isError && <span className="text-xs text-destructive">Save failed</span>}
+            </div>
+          </div>
+        ) : (
+          <p className="text-xs text-foreground">{memory.content}</p>
+        )}
+        <div className="mt-0.5 flex items-center gap-2 text-[10px] text-muted-foreground">
+          {showSentiment && (
+            <>
+              <span className="capitalize">{memory.category.replace(/_/g, " ")}</span>
+              <span>·</span>
+            </>
+          )}
+          <span>{fmtDatetime(memory.created_at)}</span>
+          {memory.has_embedding && <span className="rounded bg-muted px-1 py-px font-mono">vec</span>}
+          {memory.is_consolidated && memory.source_count > 1 && (
+            <span className="rounded bg-violet-100 px-1 py-px text-violet-700 dark:bg-violet-950/50 dark:text-violet-400">
+              merged from {memory.source_count}
+            </span>
+          )}
+          {showSentiment && <span className="ml-auto">imp {memory.importance.toFixed(2)}</span>}
+        </div>
+      </div>
+      {canEdit && !editing && (
+        <div className="flex shrink-0 items-center gap-0.5 opacity-0 transition-opacity group-hover:opacity-100">
+          <Button
+            variant="ghost"
+            size="icon-sm"
+            title="Edit"
+            className="text-muted-foreground hover:text-foreground"
+            onClick={() => { setDraft(memory.content); setEditing(true); setConfirmDelete(false); }}
+          >
+            <Pencil className="h-3.5 w-3.5" />
+          </Button>
+          {confirmDelete ? (
+            <>
+              <Button
+                variant="ghost"
+                size="icon-sm"
+                title="Confirm delete"
+                className="text-destructive hover:bg-destructive/10 hover:text-destructive"
+                onClick={() => del.mutate()}
+                disabled={del.isPending}
+              >
+                {del.isPending ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Check className="h-3.5 w-3.5" />}
+              </Button>
+              <Button
+                variant="ghost"
+                size="icon-sm"
+                title="Cancel"
+                className="text-muted-foreground hover:text-foreground"
+                onClick={() => setConfirmDelete(false)}
+              >
+                <X className="h-3.5 w-3.5" />
+              </Button>
+            </>
+          ) : (
+            <Button
+              variant="ghost"
+              size="icon-sm"
+              className="text-muted-foreground hover:text-destructive"
+              title="Delete"
+              onClick={() => setConfirmDelete(true)}
+            >
+              <Trash2 className="h-3.5 w-3.5" />
+            </Button>
+          )}
+        </div>
+      )}
+    </div>
+  );
+}
+
 function MemoriesSection({
   agentId,
   workspaceId,
@@ -758,26 +899,7 @@ function MemoriesSection({
             <p className="px-3 py-4 text-xs text-muted-foreground">No memories yet. Memories are recorded automatically after tasks complete.</p>
           )}
           {episodicMemories && episodicMemories.length > 0 && episodicMemories.map((m: AgentMemory) => (
-            <div key={m.id} className="flex items-start gap-2.5 border-b px-3 py-2.5 last:border-b-0">
-              <span className={`mt-0.5 shrink-0 text-xs font-bold ${SENTIMENT_COLORS[m.sentiment]}`}>
-                {SENTIMENT_LABELS[m.sentiment]}
-              </span>
-              <div className="min-w-0 flex-1">
-                <p className="text-xs text-foreground">{m.content}</p>
-                <div className="mt-0.5 flex items-center gap-2 text-[10px] text-muted-foreground">
-                  <span className="capitalize">{m.category.replace(/_/g, " ")}</span>
-                  <span>·</span>
-                  <span>{fmtDatetime(m.created_at)}</span>
-                  {m.has_embedding && <span className="rounded bg-muted px-1 py-px font-mono">vec</span>}
-                  {m.is_consolidated && m.source_count > 1 && (
-                    <span className="rounded bg-violet-100 px-1 py-px text-violet-700 dark:bg-violet-950/50 dark:text-violet-400">
-                      merged from {m.source_count}
-                    </span>
-                  )}
-                  <span className="ml-auto">imp {m.importance.toFixed(2)}</span>
-                </div>
-              </div>
-            </div>
+            <MemoryRow key={m.id} memory={m} agentId={agentId} canEdit={canEdit} showSentiment />
           ))}
         </div>
       )}
@@ -800,15 +922,7 @@ function MemoriesSection({
             <p className="px-3 py-4 text-xs text-muted-foreground">No user preferences recorded yet. Preferences are learned from interactions with workspace members.</p>
           )}
           {preferenceMemories && preferenceMemories.length > 0 && preferenceMemories.map((m: AgentMemory) => (
-            <div key={m.id} className="flex items-start gap-2.5 border-b px-3 py-2.5 last:border-b-0">
-              <div className="min-w-0 flex-1">
-                <p className="text-xs text-foreground">{m.content}</p>
-                <div className="mt-0.5 flex items-center gap-2 text-[10px] text-muted-foreground">
-                  <span>{fmtDatetime(m.created_at)}</span>
-                  {m.has_embedding && <span className="rounded bg-muted px-1 py-px font-mono">vec</span>}
-                </div>
-              </div>
-            </div>
+            <MemoryRow key={m.id} memory={m} agentId={agentId} canEdit={canEdit} showSentiment={false} />
           ))}
         </div>
       )}
