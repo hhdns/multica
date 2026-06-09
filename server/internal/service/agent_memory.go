@@ -10,6 +10,7 @@ import (
 	"math"
 	"net/http"
 	"os"
+	"slices"
 	"strings"
 	"sync/atomic"
 	"time"
@@ -31,6 +32,14 @@ const (
 	memorySearchTopK = 5
 	// Minimum cosine similarity threshold to include a memory in the brief.
 	memoryMinSimilarity = 0.70
+	// Time-decay lambda for episode re-ranking. Controls how quickly older
+	// memories lose relevance relative to newer ones with equal cosine similarity.
+	// At λ=0.005/day the half-life is ~139 days; a memory from 6 months ago
+	// scores ~40% of an equivalent same-day memory.
+	memoryDecayLambda = 0.005
+	// Fetch multiplier: retrieve this many extra candidates so re-ranking has
+	// enough material to fill the top-K slots after decay is applied.
+	memorySearchFetchMult = 4
 
 	// system_config key that stores the embedding model used to generate
 	// existing vectors. Compared against the live env var on startup to
@@ -394,21 +403,57 @@ func SearchRelevantMemories(
 		return recentMemoriesFallback(ctx, q, agentID)
 	}
 
-	results, err := q.SearchAgentMemories(ctx, db.SearchAgentMemoriesParams{
+	// Fetch extra candidates so time-decay re-ranking has enough material to
+	// fill the final top-K slots after older memories are downweighted.
+	candidates, err := q.SearchAgentMemories(ctx, db.SearchAgentMemoriesParams{
 		AgentID:   agentID,
 		Embedding: pgvector.NewVector(vec),
-		Limit:     int32(memorySearchTopK),
+		Limit:     int32(memorySearchTopK * memorySearchFetchMult),
 	})
-	if err != nil || len(results) == 0 {
+	if err != nil || len(candidates) == 0 {
 		return ""
+	}
+
+	// Re-rank by decayed score: score = cosine_similarity * exp(-λ * age_days).
+	// This breaks ties in favour of recent memories without discarding old but
+	// highly-relevant ones (they can still win if similarity is high enough).
+	type scored struct {
+		row          db.SearchAgentMemoriesRow
+		decayedScore float64
+	}
+	now := time.Now()
+	ranked := make([]scored, 0, len(candidates))
+	for _, r := range candidates {
+		if r.Similarity < memoryMinSimilarity {
+			continue
+		}
+		ageDays := 0.0
+		if r.CreatedAt.Valid {
+			ageDays = now.Sub(r.CreatedAt.Time).Hours() / 24
+		}
+		decayed := float64(r.Similarity) * math.Exp(-memoryDecayLambda*ageDays)
+		ranked = append(ranked, scored{r, decayed})
+	}
+	// Sort highest decayed score first.
+	slices.SortFunc(ranked, func(a, b scored) int {
+		if a.decayedScore > b.decayedScore {
+			return -1
+		}
+		if a.decayedScore < b.decayedScore {
+			return 1
+		}
+		return 0
+	})
+	// Trim to final top-K.
+	results := ranked
+	if len(results) > memorySearchTopK {
+		results = results[:memorySearchTopK]
 	}
 
 	var b strings.Builder
 	var accessedIDs []pgtype.UUID
-	for _, r := range results {
-		if r.Similarity < memoryMinSimilarity {
-			continue
-		}
+	for _, s := range results {
+		r := s.row
 		if len(accessedIDs) == 0 {
 			b.WriteString("## Relevant Past Experience\n\n")
 			b.WriteString("These memories from your past work may be relevant to the current task:\n\n")
