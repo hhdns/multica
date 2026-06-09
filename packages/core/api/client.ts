@@ -902,12 +902,15 @@ export class ApiClient {
     return res.blob();
   }
 
-  async importAgentPersona(id: string, file: File): Promise<{ memories_imported: number; memories_skipped: number }> {
-    const text = await file.text();
+  async importAgentPersona(
+    id: string,
+    bundle: object,
+    userMappings: Record<string, string> = {},
+  ): Promise<{ memories_imported: number; memories_skipped: number }> {
     return this.fetch(`/api/agents/${id}/persona/import`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: text,
+      body: JSON.stringify({ bundle, user_mappings: userMappings }),
     });
   }
 

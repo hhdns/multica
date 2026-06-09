@@ -95,6 +95,18 @@ export function PersonaTab({ agent, canEdit }: PersonaTabProps) {
 
   const [importing, setImporting] = useState(false);
   const [importResult, setImportResult] = useState<{ imported: number; skipped: number } | null>(null);
+  // pendingImport holds a parsed bundle + unmapped emails waiting for user to assign mappings.
+  const [pendingImport, setPendingImport] = useState<{
+    bundle: object;
+    unmappedEmails: string[];
+    mappings: Record<string, string>;
+  } | null>(null);
+
+  const { data: members } = useQuery({
+    queryKey: ["workspace-members", agent.workspace_id],
+    queryFn: () => api.listMembers(agent.workspace_id),
+    enabled: !!pendingImport,
+  });
 
   const handleExport = async () => {
     const blob = await api.exportAgentPersona(agent.id);
@@ -110,15 +122,36 @@ export function PersonaTab({ agent, canEdit }: PersonaTabProps) {
     const file = e.target.files?.[0];
     if (!file) return;
     e.target.value = "";
-    setImporting(true);
     setImportResult(null);
+    const text = await file.text();
+    let bundle: { memories?: { category?: string; source_user_email?: string }[] };
+    try { bundle = JSON.parse(text); } catch { return; }
+
+    const unmappedEmails = [
+      ...new Set(
+        (bundle.memories ?? [])
+          .filter((m) => m.category === "user_preference" && m.source_user_email)
+          .map((m) => m.source_user_email as string),
+      ),
+    ];
+
+    if (unmappedEmails.length > 0) {
+      setPendingImport({ bundle, unmappedEmails, mappings: {} });
+      return;
+    }
+    await doImport(bundle, {});
+  };
+
+  const doImport = async (bundle: object, userMappings: Record<string, string>) => {
+    setImporting(true);
     try {
-      const result = await api.importAgentPersona(agent.id, file);
+      const result = await api.importAgentPersona(agent.id, bundle, userMappings);
       setImportResult({ imported: result.memories_imported, skipped: result.memories_skipped });
       qc.invalidateQueries({ queryKey: ["agent-memories", agent.id] });
       qc.invalidateQueries({ queryKey });
     } finally {
       setImporting(false);
+      setPendingImport(null);
     }
   };
 
@@ -158,10 +191,52 @@ export function PersonaTab({ agent, canEdit }: PersonaTabProps) {
           <label className="inline-flex h-7 cursor-pointer items-center gap-1.5 rounded-md px-2 text-xs font-medium text-muted-foreground transition-colors hover:bg-accent hover:text-accent-foreground">
             {importing ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Upload className="h-3.5 w-3.5" />}
             Import
-            <input type="file" accept=".json" className="hidden" disabled={importing} onChange={handleImport} />
+            <input type="file" accept=".json" className="hidden" disabled={importing || !!pendingImport} onChange={handleImport} />
           </label>
         )}
       </div>
+
+      {pendingImport && (
+        <div className="rounded-lg border bg-muted/40 p-4">
+          <p className="mb-1 text-sm font-medium">Map imported users</p>
+          <p className="mb-3 text-xs text-muted-foreground">
+            This bundle contains user preferences from {pendingImport.unmappedEmails.length === 1 ? "an external user" : "external users"}.
+            Map each to a workspace member so preferences are attributed correctly, or leave unassigned.
+          </p>
+          <div className="mb-4 flex flex-col gap-2">
+            {pendingImport.unmappedEmails.map((email) => (
+              <div key={email} className="flex items-center gap-3">
+                <span className="w-0 flex-1 truncate text-xs text-muted-foreground" title={email}>{email}</span>
+                <span className="text-xs text-muted-foreground">→</span>
+                <select
+                  className="h-7 rounded-md border bg-background px-2 text-xs"
+                  value={pendingImport.mappings[email] ?? ""}
+                  onChange={(e) =>
+                    setPendingImport((p) => p && ({
+                      ...p,
+                      mappings: { ...p.mappings, [email]: e.target.value },
+                    }))
+                  }
+                >
+                  <option value="">Leave unassigned</option>
+                  {(members ?? []).map((m) => (
+                    <option key={m.user_id} value={m.user_id}>
+                      {m.name || m.email}
+                    </option>
+                  ))}
+                </select>
+              </div>
+            ))}
+          </div>
+          <div className="flex justify-end gap-2">
+            <Button size="sm" variant="ghost" onClick={() => setPendingImport(null)}>Cancel</Button>
+            <Button size="sm" disabled={importing} onClick={() => doImport(pendingImport.bundle, pendingImport.mappings)}>
+              {importing ? <><Loader2 className="mr-1.5 h-3 w-3 animate-spin" />Importing…</> : "Confirm Import"}
+            </Button>
+          </div>
+        </div>
+      )}
+
       <MoodSection persona={persona} />
       <TraitsSection persona={persona} canEdit={canEdit} onSave={(data) => mutation.mutate(data)} saving={mutation.isPending} />
       <StrengthsSection persona={persona} canEdit={canEdit} onSave={(data) => mutation.mutate(data)} />

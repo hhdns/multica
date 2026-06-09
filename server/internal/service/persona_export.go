@@ -10,6 +10,7 @@ import (
 	"github.com/jackc/pgx/v5/pgtype"
 	pgvector "github.com/pgvector/pgvector-go"
 	db "github.com/multica-ai/multica/server/pkg/db/generated"
+	"github.com/multica-ai/multica/server/internal/util"
 )
 
 const personaBundleVersion = "1"
@@ -140,14 +141,15 @@ func ExportPersona(
 // ImportPersona merges a PersonaBundle into an existing agent. Behaviour:
 //   - Persona instructions and traits are overwritten with bundle values.
 //   - Memories are appended; identical content is skipped (dedup by content).
-//   - user_preference memories: source_user_email is resolved to a local user ID;
-//     unmatched users keep source_user_id = NULL (content retains the name).
+//   - user_preference memories: userMappings (source_email → local UUID string) is
+//     checked first; fallback to GetUserByEmail; unmatched keeps source_user_id = NULL.
 //   - Embeddings are enqueued for rebuild after import.
 func ImportPersona(
 	ctx context.Context,
 	q *db.Queries,
 	agent db.Agent,
 	bundle PersonaBundle,
+	userMappings map[string]string,
 ) (imported int, skipped int, err error) {
 	// Overwrite agent instructions.
 	if strings.TrimSpace(bundle.Persona.Instructions) != "" {
@@ -203,9 +205,12 @@ func ImportPersona(
 		}
 
 		// Resolve source user by email for user_preference memories.
+		// userMappings takes precedence over automatic email lookup.
 		var sourceUserID pgtype.UUID
 		if m.Category == "user_preference" && m.SourceUserEmail != "" {
-			if u, err := q.GetUserByEmail(ctx, m.SourceUserEmail); err == nil {
+			if localID, ok := userMappings[m.SourceUserEmail]; ok && localID != "" {
+				sourceUserID, _ = util.ParseUUID(localID)
+			} else if u, err := q.GetUserByEmail(ctx, m.SourceUserEmail); err == nil {
 				sourceUserID = u.ID
 			}
 		}

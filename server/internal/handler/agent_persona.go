@@ -440,6 +440,14 @@ func (h *Handler) ExportAgentPersona(w http.ResponseWriter, r *http.Request) {
 	_ = json.NewEncoder(w).Encode(bundle)
 }
 
+// importPersonaRequest is the wire shape for POST /api/agents/{id}/persona/import.
+// UserMappings maps source email addresses (from the bundle) to local user UUIDs,
+// allowing the caller to explicitly reassign user_preference memories to workspace members.
+type importPersonaRequest struct {
+	Bundle       service.PersonaBundle `json:"bundle"`
+	UserMappings map[string]string     `json:"user_mappings,omitempty"`
+}
+
 // ImportAgentPersona handles POST /api/agents/{id}/persona/import.
 // Merges a PersonaBundle into the agent: overwrites instructions/traits, appends new memories.
 func (h *Handler) ImportAgentPersona(w http.ResponseWriter, r *http.Request) {
@@ -448,17 +456,20 @@ func (h *Handler) ImportAgentPersona(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	var bundle service.PersonaBundle
-	if err := json.NewDecoder(r.Body).Decode(&bundle); err != nil {
+	var req importPersonaRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		writeError(w, http.StatusBadRequest, "invalid JSON")
 		return
 	}
-	if bundle.Version != "1" {
+	if req.Bundle.Version != "1" {
 		writeError(w, http.StatusBadRequest, "unsupported bundle version")
 		return
 	}
+	if req.UserMappings == nil {
+		req.UserMappings = map[string]string{}
+	}
 
-	imported, skipped, err := service.ImportPersona(r.Context(), h.Queries, agent, bundle)
+	imported, skipped, err := service.ImportPersona(r.Context(), h.Queries, agent, req.Bundle, req.UserMappings)
 	if err != nil {
 		slog.Warn("import persona: failed", "agent_id", uuidToString(agent.ID), "error", err)
 		writeError(w, http.StatusInternalServerError, "import failed")
