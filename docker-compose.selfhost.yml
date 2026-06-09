@@ -153,8 +153,20 @@ services:
     command:
       - |
         ollama serve &
-        until curl -sf http://localhost:11434 > /dev/null 2>&1; do sleep 1; done
-        ollama pull $${PERSONA_EMBEDDING_MODEL:-bge-m3}
+        until ollama list > /dev/null 2>&1; do sleep 1; done
+        MODEL=$${PERSONA_EMBEDDING_MODEL:-bge-m3}
+        echo "Pulling embedding model: $${MODEL}"
+        n=0
+        until ollama pull "$${MODEL}"; do
+          n=$$((n+1))
+          if [ $$n -ge 3 ]; then
+            echo "ERROR: failed to pull $${MODEL} after 3 attempts — container will exit and restart"
+            exit 1
+          fi
+          echo "Pull attempt $$n failed, retrying in 10s..."
+          sleep 10
+        done
+        echo "Model $${MODEL} ready."
         wait
     environment:
       PERSONA_EMBEDDING_MODEL: ${PERSONA_EMBEDDING_MODEL:-bge-m3}
@@ -164,11 +176,11 @@ services:
       - embeddings_cache:/root/.ollama
     restart: unless-stopped
     healthcheck:
-      test: ["CMD-SHELL", "curl -sf http://localhost:11434/api/tags || exit 1"]
-      interval: 10s
-      timeout: 5s
-      retries: 12
-      start_period: 90s
+      test: ["CMD", "ollama", "list"]
+      interval: 15s
+      timeout: 10s
+      retries: 20
+      start_period: 300s
 
 volumes:
   pgdata:
