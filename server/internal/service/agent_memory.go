@@ -1118,12 +1118,42 @@ Output only the memory text, no preamble.`,
 	return strings.TrimSpace(res.text)
 }
 
-// GenerateConversationEpisode summarises a completed conversation (chat or
-// issue task) into a conversation_episode memory and persists it. It is
-// intended to be called in a detached goroutine after task completion.
-//
-// For chat tasks supply a non-nil chatSessionID; for issue tasks supply a
-// non-nil issueID. The function is a no-op when neither is present.
+// buildChatSessionTranscript reads chat_message rows for a session and formats
+// them as a compact dialogue transcript. Prefers chat messages over the
+// internal task execution log because they capture what was actually said,
+// not the agent's tool-call trace.
+func buildChatSessionTranscript(ctx context.Context, q *db.Queries, sessionID pgtype.UUID, maxChars int) string {
+	msgs, err := q.ListChatMessages(ctx, sessionID)
+	if err != nil || len(msgs) == 0 {
+		return ""
+	}
+	var sb strings.Builder
+	for _, m := range msgs {
+		content := strings.TrimSpace(m.Content)
+		if content == "" || m.FailureReason.Valid {
+			continue
+		}
+		prefix := "assistant"
+		if m.Role == "user" {
+			prefix = "user"
+		}
+		if len(content) > 400 {
+			content = content[:400] + "…"
+		}
+		sb.WriteString("[" + prefix + "] ")
+		sb.WriteString(content)
+		sb.WriteByte('\n')
+		if sb.Len() >= maxChars {
+			break
+		}
+	}
+	return strings.TrimSpace(sb.String())
+}
+
+// GenerateConversationEpisode summarises a completed conversation arc into a
+// conversation_episode memory and persists it. For chat sessions it reads
+// from chat_message; for issue tasks it falls back to task_message.
+// Intended to be called in a detached goroutine; errors are logged only.
 func GenerateConversationEpisode(
 	ctx context.Context,
 	q *db.Queries,
@@ -1134,8 +1164,15 @@ func GenerateConversationEpisode(
 ) {
 	cfg := resolveSynthesisConfig()
 
-	// Build a transcript from task messages (covers both chat and issue tasks).
-	transcript := buildTaskTranscript(ctx, q, taskID, 3000)
+	// Prefer the chat transcript when a session is available — it reflects the
+	// actual conversation rather than the internal execution trace.
+	var transcript string
+	if chatSessionID.Valid {
+		transcript = buildChatSessionTranscript(ctx, q, chatSessionID, 3000)
+	}
+	if transcript == "" {
+		transcript = buildTaskTranscript(ctx, q, taskID, 3000)
+	}
 	if strings.TrimSpace(transcript) == "" {
 		return
 	}
@@ -1210,6 +1247,62 @@ Output only the memory text, no preamble.`,
 			})
 		}
 	}()
+}
+
+// GetRecentChatContext fetches the last N visible chat messages sent to/from
+// the agent across all sessions and formats them as a `## Recent Conversations`
+// block for Layer-1 temporal injection. Newest messages are fetched first,
+// then reversed so the agent reads them chronologically.
+//
+// This gives the agent verbatim working memory of recent exchanges without
+// any LLM call — solving "what did we just talk about?" quickly and cheaply.
+func GetRecentChatContext(
+	ctx context.Context,
+	q *db.Queries,
+	agentID, workspaceID pgtype.UUID,
+	limit int32,
+) string {
+	if limit <= 0 {
+		limit = 20
+	}
+	rows, err := q.GetRecentAgentChatMessages(ctx, db.GetRecentAgentChatMessagesParams{
+		AgentID:     agentID,
+		WorkspaceID: workspaceID,
+		MsgLimit:    limit,
+	})
+	if err != nil || len(rows) == 0 {
+		return ""
+	}
+
+	// Reverse DESC→ASC for chronological presentation.
+	for i, j := 0, len(rows)-1; i < j; i, j = i+1, j-1 {
+		rows[i], rows[j] = rows[j], rows[i]
+	}
+
+	var b strings.Builder
+	b.WriteString("## Recent Conversations\n\n")
+	var prevSession pgtype.UUID
+	for _, r := range rows {
+		if r.ChatSessionID != prevSession {
+			if prevSession.Valid {
+				b.WriteString("\n")
+			}
+			prevSession = r.ChatSessionID
+			if r.CreatedAt.Valid {
+				b.WriteString("*" + r.CreatedAt.Time.UTC().Format("Jan 2, 15:04") + "*\n")
+			}
+		}
+		speaker := "You"
+		if r.Role == "user" {
+			speaker = "User"
+		}
+		content := r.Content
+		if len(content) > 300 {
+			content = content[:300] + "…"
+		}
+		b.WriteString(speaker + ": " + content + "\n")
+	}
+	return strings.TrimRight(b.String(), "\n")
 }
 
 // GetRecentEpisodeContext fetches the most recent conversation_episode memories

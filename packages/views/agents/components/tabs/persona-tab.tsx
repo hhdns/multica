@@ -565,10 +565,10 @@ function EpisodeRecallSection({
 
   return (
     <div className="flex flex-col gap-2">
-      <SectionTitle>Conversation Recall</SectionTitle>
+      <SectionTitle>Recent Message Window</SectionTitle>
       <p className="text-xs text-muted-foreground">
-        How many recent conversations are injected into each task brief via the temporal channel — independent of semantic search.{" "}
-        <span className="text-foreground/60">Recommended range: 3–8. Higher values give the agent more historical context but consume more of the context window; lower values reduce context use but may miss recent interactions.</span>
+        Controls how many recent chat messages (×4) are injected into each task brief as verbatim working memory — the agent's "what did we just talk about?" layer.{" "}
+        <span className="text-foreground/60">Recommended range: 3–8. Each unit ≈ 4 messages. Higher values give broader recent context but consume more of the context window; lower values keep the brief lean but may miss recent exchanges.</span>
       </p>
       <div className="flex items-center gap-3 rounded-lg border bg-muted/30 px-4 py-3">
         <input
@@ -583,7 +583,7 @@ function EpisodeRecallSection({
           }}
           className="w-16 rounded-md border bg-background px-2 py-1 text-center text-sm tabular-nums disabled:cursor-default disabled:opacity-60"
         />
-        <span className="text-xs text-muted-foreground">episodes (1–20)</span>
+        <span className="text-xs text-muted-foreground">units (1–20, ≈ 4 msgs each)</span>
       </div>
       {canEdit && isDirty && (
         <div className="flex justify-end">

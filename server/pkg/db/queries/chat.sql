@@ -179,3 +179,29 @@ SELECT * FROM chat_message
 WHERE chat_session_id = $1 AND role = 'user'
 ORDER BY created_at DESC
 LIMIT 1;
+
+-- name: GetRecentAgentChatMessages :many
+-- Fetches the most recent visible chat messages across all sessions for an
+-- agent, newest-first. Used for Layer-1 temporal injection at claim time:
+-- raw verbatim messages give the agent working memory of recent exchanges
+-- without requiring an LLM call.
+SELECT cm.id, cm.chat_session_id, cm.role, cm.content, cm.created_at
+FROM chat_message cm
+JOIN chat_session cs ON cs.id = cm.chat_session_id
+WHERE cs.agent_id = @agent_id
+  AND cs.workspace_id = @workspace_id
+  AND cm.role IN ('user', 'assistant')
+  AND cm.failure_reason IS NULL
+  AND cm.content != ''
+ORDER BY cm.created_at DESC
+LIMIT @msg_limit;
+
+-- name: MarkChatSessionEpisode :exec
+-- Records the time at which a conversation_episode memory was generated
+-- for this session. Used by arc-boundary detection to avoid duplicates.
+UPDATE chat_session SET last_episode_at = now() WHERE id = $1;
+
+-- name: GetChatSessionEpisodeState :one
+-- Returns the fields needed to decide whether to generate an episode at
+-- claim time: the session's last-activity and last-episode timestamps.
+SELECT last_episode_at, updated_at FROM chat_session WHERE id = $1;

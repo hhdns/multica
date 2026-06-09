@@ -1743,22 +1743,45 @@ func (h *Handler) ClaimTaskByRuntime(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	// Inject recent conversation episodes via the temporal channel (independent
-	// of semantic search). The recall count comes from the agent's persona
-	// config; defaults to 5 when no persona row exists.
-	if resp.Agent != nil {
-		episodeLimit := int32(5)
+	// Layer-1 temporal injection: raw recent chat messages from the agent's
+	// sessions, newest-first, reversed for chronological display. This gives
+	// the agent verbatim working memory of recent exchanges ("what did we just
+	// talk about?") without any LLM call. Message window = episode_recall_count
+	// from the persona config (default 20 when no persona row exists).
+	if resp.Agent != nil && resp.WorkspaceID != "" {
+		msgLimit := int32(20)
 		if persona, err := h.Queries.GetAgentPersona(r.Context(), parseUUID(resp.Agent.ID)); err == nil {
-			episodeLimit = persona.EpisodeRecallCount
-		}
-		episodeCtx := service.GetRecentEpisodeContext(r.Context(), h.Queries, parseUUID(resp.Agent.ID), episodeLimit)
-		if episodeCtx != "" {
-			if resp.Agent.MemoryContext == "" {
-				resp.Agent.MemoryContext = episodeCtx
-			} else {
-				resp.Agent.MemoryContext = resp.Agent.MemoryContext + "\n\n" + episodeCtx
+			msgLimit = persona.EpisodeRecallCount * 4
+			if msgLimit < 8 {
+				msgLimit = 8
+			}
+			if msgLimit > 40 {
+				msgLimit = 40
 			}
 		}
+		wsUUID, wsErr := util.ParseUUID(resp.WorkspaceID)
+		if wsErr == nil {
+			chatCtx := service.GetRecentChatContext(
+				r.Context(), h.Queries,
+				parseUUID(resp.Agent.ID), wsUUID,
+				msgLimit,
+			)
+			if chatCtx != "" {
+				if resp.Agent.MemoryContext == "" {
+					resp.Agent.MemoryContext = chatCtx
+				} else {
+					resp.Agent.MemoryContext = resp.Agent.MemoryContext + "\n\n" + chatCtx
+				}
+			}
+		}
+	}
+
+	// Arc-boundary detection: when a chat task starts after a gap of ≥ 2 hours
+	// since the previous message in the session, the preceding exchange forms a
+	// complete "arc". Generate a Layer-2 conversation_episode memory for it
+	// asynchronously so past arcs are available in semantic search.
+	if task.ChatSessionID.Valid && resp.Agent != nil {
+		go h.maybeGenerateArcEpisode(context.Background(), task, resp.WorkspaceID)
 	}
 
 	// Workspace isolation check: the daemon uses this response's workspace_id
@@ -2047,7 +2070,6 @@ func (h *Handler) CompleteTask(w http.ResponseWriter, r *http.Request) {
 
 	// Record an episodic memory for this task outcome (fire-and-forget).
 	go h.recordTaskOutcomeMemory(context.Background(), task, "completed", workspaceID)
-	go h.recordConversationEpisode(context.Background(), task, workspaceID)
 
 	slog.Info("task completed", "task_id", taskID, "agent_id", uuidToString(task.AgentID))
 	writeJSON(w, http.StatusOK, taskToResponse(*task, workspaceID))
@@ -2215,7 +2237,6 @@ func (h *Handler) FailTask(w http.ResponseWriter, r *http.Request) {
 
 	// Record an episodic memory for this task outcome (fire-and-forget).
 	go h.recordTaskOutcomeMemory(context.Background(), task, "failed", workspaceID)
-	go h.recordConversationEpisode(context.Background(), task, workspaceID)
 
 	slog.Info("task failed", "task_id", taskID, "agent_id", uuidToString(task.AgentID), "task_error", req.Error, "failure_reason", req.FailureReason)
 	writeJSON(w, http.StatusOK, taskToResponse(*task, workspaceID))
@@ -2274,19 +2295,78 @@ func (h *Handler) recordTaskOutcomeMemory(
 	}
 }
 
-// recordConversationEpisode summarises the just-completed task conversation
-// into a conversation_episode memory. Covers both chat and issue tasks.
-// Runs in a goroutine; errors are logged only.
-func (h *Handler) recordConversationEpisode(
+// maybeGenerateArcEpisode detects a conversation arc boundary for a chat task
+// and, when found, asynchronously generates a Layer-2 conversation_episode
+// memory for the preceding arc.
+//
+// A boundary is detected when the second-to-last user message in the session
+// is older than arcGapMinutes, indicating the user returned after a break.
+// To prevent duplicate episodes the session's last_episode_at timestamp is
+// checked and updated atomically.
+func (h *Handler) maybeGenerateArcEpisode(
 	ctx context.Context,
 	task *db.AgentTaskQueue,
 	workspaceID string,
 ) {
-	if task == nil || !task.AgentID.Valid {
+	const arcGapMinutes = 120 // 2-hour arc boundary
+
+	if task == nil || !task.AgentID.Valid || !task.ChatSessionID.Valid {
 		return
 	}
 
-	// Resolve the initiator's display name for the summary prompt.
+	// Load episode-tracking state for the session.
+	state, err := h.Queries.GetChatSessionEpisodeState(ctx, task.ChatSessionID)
+	if err != nil {
+		return
+	}
+
+	// The session was last active more than arcGapMinutes ago if there has been
+	// no episode generated since the last chat activity (updated_at).
+	// updated_at was touched when the NEW message arrived, so we compare
+	// last_episode_at against the previous activity window.
+	if !state.UpdatedAt.Valid {
+		return
+	}
+	prevActivity := state.UpdatedAt.Time
+
+	// If a recent episode already covers this arc, skip.
+	if state.LastEpisodeAt.Valid && !state.LastEpisodeAt.Time.Before(prevActivity.Add(-time.Duration(arcGapMinutes)*time.Minute)) {
+		return
+	}
+
+	// Check the second-to-last user message to measure the actual gap.
+	msgs, err := h.Queries.ListChatMessages(ctx, task.ChatSessionID)
+	if err != nil {
+		return
+	}
+	// Find the penultimate user message (skip the most-recent one that just arrived).
+	userMsgCount := 0
+	var prevUserMsgTime time.Time
+	for i := len(msgs) - 1; i >= 0; i-- {
+		if msgs[i].Role == "user" && msgs[i].CreatedAt.Valid {
+			userMsgCount++
+			if userMsgCount == 2 {
+				prevUserMsgTime = msgs[i].CreatedAt.Time
+				break
+			}
+		}
+	}
+	if userMsgCount < 2 {
+		// Only one user message in the session — nothing to summarise yet.
+		return
+	}
+	if time.Since(prevUserMsgTime) < time.Duration(arcGapMinutes)*time.Minute {
+		// Gap is too small; still within the same arc.
+		return
+	}
+
+	// Mark the session before generating so concurrent claims don't double-fire.
+	if err := h.Queries.MarkChatSessionEpisode(ctx, task.ChatSessionID); err != nil {
+		slog.Debug("arc episode: mark session failed", "error", err)
+		return
+	}
+
+	// Resolve initiator name for the episode prompt.
 	initiatorName := ""
 	if task.InitiatorUserID.Valid {
 		if u, err := h.Queries.GetUser(ctx, task.InitiatorUserID); err == nil {
