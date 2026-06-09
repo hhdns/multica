@@ -29,6 +29,7 @@ interface ConfigState {
     personaSynthesisBackend?: string;
     embeddingModelStale?: boolean;
   }) => void;
+  setEmbeddingModelStale: (stale: boolean) => void;
   setDaemonConfig: (config: {
     daemonServerUrl?: string;
     daemonAppUrl?: string;
@@ -53,6 +54,7 @@ export const configStore = createStore<ConfigState>((set) => ({
     personaSynthesisBackend = "",
     embeddingModelStale = false,
   }) => set({ allowSignup, googleClientId, workspaceCreationDisabled, personaSynthesisBackend, embeddingModelStale }),
+  setEmbeddingModelStale: (stale) => set({ embeddingModelStale: stale }),
   setDaemonConfig: ({ daemonServerUrl = "", daemonAppUrl = "" }) =>
     set({ daemonServerUrl, daemonAppUrl }),
 }));

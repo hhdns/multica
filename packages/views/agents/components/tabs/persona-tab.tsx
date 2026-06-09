@@ -549,7 +549,10 @@ function MemoriesSection({
 }) {
   const [open, setOpen] = useState(false);
   const [prefOpen, setPrefOpen] = useState(true);
+  const [rebuildOpen, setRebuildOpen] = useState(false);
+  const [lastRebuiltAt, setLastRebuiltAt] = useState<Date | null>(null);
   const embeddingModelStale = useConfigStore((s) => s.embeddingModelStale);
+  const setEmbeddingModelStale = useConfigStore((s) => s.setEmbeddingModelStale);
 
   const { data: memories, isLoading } = useQuery({
     queryKey: ["agent-memories", agentId],
@@ -559,6 +562,13 @@ function MemoriesSection({
 
   const rebuild = useMutation({
     mutationFn: () => api.rebuildWorkspaceEmbeddings(workspaceId),
+    onSuccess: () => { setTimeout(() => rebuild.reset(), 3000); },
+    onError: () => { setTimeout(() => rebuild.reset(), 5000); },
+  });
+
+  useWSEvent("memory:embeddings_rebuilt", () => {
+    setLastRebuiltAt(new Date());
+    setEmbeddingModelStale(false);
   });
 
   const episodicMemories = memories?.filter((m: AgentMemory) => m.category !== "user_preference");
@@ -656,6 +666,54 @@ function MemoriesSection({
             </div>
           )}
         </>
+      )}
+      {canEdit && (
+        <div className="mt-2 border-t pt-3">
+          <button
+            className="flex w-full items-center gap-2 text-xs font-semibold uppercase tracking-wide text-muted-foreground hover:text-foreground"
+            onClick={() => setRebuildOpen((v) => !v)}
+          >
+            <Cpu className="h-3.5 w-3.5" />
+            Embeddings
+            {rebuildOpen ? <ChevronDown className="ml-auto h-3 w-3" /> : <ChevronRight className="ml-auto h-3 w-3" />}
+          </button>
+          {rebuildOpen && (
+            <div className="mt-2 flex items-start justify-between gap-4 rounded-lg border px-3 py-3">
+              <div className="min-w-0 text-xs text-muted-foreground">
+                <p className="mb-1 font-medium text-foreground">Rebuild memory embeddings</p>
+                <p>
+                  Each memory has a vector embedding used for semantic recall during tasks.
+                  Rebuild if you switched the embedding model in Settings, or if memories were imported from another system and recall seems off.
+                  Runs in the background — the workspace stays fully operational.
+                </p>
+              </div>
+              <div className="flex shrink-0 flex-col items-end gap-1">
+                <Button
+                  size="sm"
+                  variant={rebuild.isError ? "destructive" : "outline"}
+                  className="mt-0.5"
+                  disabled={rebuild.isPending || rebuild.isSuccess}
+                  onClick={() => rebuild.mutate()}
+                >
+                  {rebuild.isPending ? (
+                    <><Loader2 className="mr-1.5 h-3 w-3 animate-spin" />Rebuilding…</>
+                  ) : rebuild.isSuccess ? (
+                    "Starting…"
+                  ) : rebuild.isError ? (
+                    "Failed — retry?"
+                  ) : (
+                    "Rebuild"
+                  )}
+                </Button>
+                {lastRebuiltAt && !rebuild.isPending && !rebuild.isError && (
+                  <span className="text-[10px] text-muted-foreground">
+                    Rebuilt at {lastRebuiltAt.toLocaleTimeString()}
+                  </span>
+                )}
+              </div>
+            </div>
+          )}
+        </div>
       )}
     </div>
   );

@@ -14,6 +14,7 @@ import (
 	"github.com/multica-ai/multica/server/internal/logger"
 	"github.com/multica-ai/multica/server/internal/service"
 	db "github.com/multica-ai/multica/server/pkg/db/generated"
+	"github.com/multica-ai/multica/server/pkg/protocol"
 )
 
 // AgentPersonaResponse is the wire shape for GET /api/agents/{id}/persona.
@@ -481,13 +482,17 @@ func (h *Handler) RebuildEmbeddings(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	wsIDStr := uuidToString(wsID)
 	go func() {
 		ctx := context.Background()
 		if err := service.RebuildWorkspaceEmbeddings(ctx, h.Queries, wsID); err != nil {
-			slog.Warn("rebuild embeddings: failed", "workspace_id", wsID, "error", err)
+			slog.Warn("rebuild embeddings: failed", "workspace_id", wsIDStr, "error", err)
 			return
 		}
-		slog.Info("rebuild embeddings: completed", "workspace_id", wsID)
+		slog.Info("rebuild embeddings: completed", "workspace_id", wsIDStr)
+		h.publish(protocol.EventMemoryEmbeddingsRebuilt, wsIDStr, "system", "", map[string]any{
+			"workspace_id": wsIDStr,
+		})
 	}()
 
 	writeJSON(w, http.StatusAccepted, map[string]string{"status": "started"})
