@@ -874,6 +874,8 @@ func NewRouterWithOptions(pool *pgxpool.Pool, hub *realtime.Hub, bus *events.Bus
 					r.Get("/persona", h.GetAgentPersona)
 					r.Put("/persona", h.UpdateAgentPersona)
 					r.Post("/persona/synthesize", h.SynthesizeAgentPersona)
+					r.Get("/persona/export", h.ExportAgentPersona)
+					r.Post("/persona/import", h.ImportAgentPersona)
 					r.Get("/memories", h.ListAgentMemories)
 					r.Get("/llm-calls", h.ListAgentLLMCalls)
 				})

@@ -12,6 +12,26 @@ import (
 	pgvector "github.com/pgvector/pgvector-go"
 )
 
+const agentMemoryContentExists = `-- name: AgentMemoryContentExists :one
+SELECT EXISTS (
+    SELECT 1 FROM agent_memory
+    WHERE agent_id = $1 AND content = $2
+) AS exists
+`
+
+type AgentMemoryContentExistsParams struct {
+	AgentID pgtype.UUID `json:"agent_id"`
+	Content string      `json:"content"`
+}
+
+// Checks whether an identical memory already exists for the agent (import dedup).
+func (q *Queries) AgentMemoryContentExists(ctx context.Context, arg AgentMemoryContentExistsParams) (bool, error) {
+	row := q.db.QueryRow(ctx, agentMemoryContentExists, arg.AgentID, arg.Content)
+	var exists bool
+	err := row.Scan(&exists)
+	return exists, err
+}
+
 const bumpMemoryAccess = `-- name: BumpMemoryAccess :exec
 UPDATE agent_memory
 SET access_count     = access_count + 1,
@@ -144,6 +164,73 @@ WHERE target.agent_id = $1
 func (q *Queries) DeleteOldAgentMemories(ctx context.Context, agentID pgtype.UUID) error {
 	_, err := q.db.Exec(ctx, deleteOldAgentMemories, agentID)
 	return err
+}
+
+const exportAgentMemories = `-- name: ExportAgentMemories :many
+SELECT
+    am.content,
+    am.category,
+    am.sentiment,
+    am.importance,
+    am.emotional_valence,
+    am.emotional_intensity,
+    am.is_consolidated,
+    am.source_count,
+    am.created_at,
+    u.name  AS source_user_name,
+    u.email AS source_user_email
+FROM agent_memory am
+LEFT JOIN "user" u ON u.id = am.source_user_id AND am.category = 'user_preference'
+WHERE am.agent_id = $1
+ORDER BY am.created_at ASC
+`
+
+type ExportAgentMemoriesRow struct {
+	Content            string             `json:"content"`
+	Category           string             `json:"category"`
+	Sentiment          string             `json:"sentiment"`
+	Importance         float32            `json:"importance"`
+	EmotionalValence   float32            `json:"emotional_valence"`
+	EmotionalIntensity float32            `json:"emotional_intensity"`
+	IsConsolidated     bool               `json:"is_consolidated"`
+	SourceCount        int32              `json:"source_count"`
+	CreatedAt          pgtype.Timestamptz `json:"created_at"`
+	SourceUserName     pgtype.Text        `json:"source_user_name"`
+	SourceUserEmail    pgtype.Text        `json:"source_user_email"`
+}
+
+// Full export of all memories for an agent, with the source user's name and
+// email joined for user_preference entries (NULL for other categories).
+func (q *Queries) ExportAgentMemories(ctx context.Context, agentID pgtype.UUID) ([]ExportAgentMemoriesRow, error) {
+	rows, err := q.db.Query(ctx, exportAgentMemories, agentID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []ExportAgentMemoriesRow{}
+	for rows.Next() {
+		var i ExportAgentMemoriesRow
+		if err := rows.Scan(
+			&i.Content,
+			&i.Category,
+			&i.Sentiment,
+			&i.Importance,
+			&i.EmotionalValence,
+			&i.EmotionalIntensity,
+			&i.IsConsolidated,
+			&i.SourceCount,
+			&i.CreatedAt,
+			&i.SourceUserName,
+			&i.SourceUserEmail,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
 }
 
 const listAgentMemories = `-- name: ListAgentMemories :many

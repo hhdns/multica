@@ -155,3 +155,30 @@ WHERE agent_id = $1
   AND category = 'user_preference'
 ORDER BY created_at DESC
 LIMIT $3;
+
+-- name: ExportAgentMemories :many
+-- Full export of all memories for an agent, with the source user's name and
+-- email joined for user_preference entries (NULL for other categories).
+SELECT
+    am.content,
+    am.category,
+    am.sentiment,
+    am.importance,
+    am.emotional_valence,
+    am.emotional_intensity,
+    am.is_consolidated,
+    am.source_count,
+    am.created_at,
+    u.name  AS source_user_name,
+    u.email AS source_user_email
+FROM agent_memory am
+LEFT JOIN "user" u ON u.id = am.source_user_id AND am.category = 'user_preference'
+WHERE am.agent_id = $1
+ORDER BY am.created_at ASC;
+
+-- name: AgentMemoryContentExists :one
+-- Checks whether an identical memory already exists for the agent (import dedup).
+SELECT EXISTS (
+    SELECT 1 FROM agent_memory
+    WHERE agent_id = $1 AND content = $2
+) AS exists;

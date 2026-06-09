@@ -3,6 +3,7 @@ package handler
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"log/slog"
 	"net/http"
 	"strings"
@@ -415,6 +416,60 @@ func (h *Handler) ListAgentLLMCalls(w http.ResponseWriter, r *http.Request) {
 // RecordTaskSignal writes a system-sourced interaction signal after task completion/failure.
 func RecordTaskSignal(ctx context.Context, q *db.Queries, agentID, workspaceID pgtype.UUID, signalType, content string) {
 	service.RecordCommentSignal(ctx, q, agentID, workspaceID, signalType, 0.5, content, pgtype.UUID{}, pgtype.UUID{})
+}
+
+// ExportAgentPersona handles GET /api/agents/{id}/persona/export.
+// Returns the full persona bundle as a downloadable JSON file.
+func (h *Handler) ExportAgentPersona(w http.ResponseWriter, r *http.Request) {
+	agent, ok := h.loadAgentForUser(w, r, chi.URLParam(r, "id"))
+	if !ok {
+		return
+	}
+
+	bundle, err := service.ExportPersona(r.Context(), h.Queries, agent)
+	if err != nil {
+		slog.Warn("export persona: failed", "agent_id", uuidToString(agent.ID), "error", err)
+		writeError(w, http.StatusInternalServerError, "export failed")
+		return
+	}
+
+	filename := fmt.Sprintf("%s-persona.json", strings.ReplaceAll(agent.Name, " ", "-"))
+	w.Header().Set("Content-Disposition", "attachment; filename="+filename)
+	w.Header().Set("Content-Type", "application/json")
+	_ = json.NewEncoder(w).Encode(bundle)
+}
+
+// ImportAgentPersona handles POST /api/agents/{id}/persona/import.
+// Merges a PersonaBundle into the agent: overwrites instructions/traits, appends new memories.
+func (h *Handler) ImportAgentPersona(w http.ResponseWriter, r *http.Request) {
+	agent, ok := h.loadAgentForUser(w, r, chi.URLParam(r, "id"))
+	if !ok {
+		return
+	}
+
+	var bundle service.PersonaBundle
+	if err := json.NewDecoder(r.Body).Decode(&bundle); err != nil {
+		writeError(w, http.StatusBadRequest, "invalid JSON")
+		return
+	}
+	if bundle.Version != "1" {
+		writeError(w, http.StatusBadRequest, "unsupported bundle version")
+		return
+	}
+
+	imported, skipped, err := service.ImportPersona(r.Context(), h.Queries, agent, bundle)
+	if err != nil {
+		slog.Warn("import persona: failed", "agent_id", uuidToString(agent.ID), "error", err)
+		writeError(w, http.StatusInternalServerError, "import failed")
+		return
+	}
+
+	slog.Info("persona imported", "agent_id", uuidToString(agent.ID),
+		"memories_imported", imported, "memories_skipped", skipped)
+	writeJSON(w, http.StatusOK, map[string]any{
+		"memories_imported": imported,
+		"memories_skipped":  skipped,
+	})
 }
 
 // RebuildEmbeddings handles POST /api/workspaces/{id}/memories/rebuild-embeddings.
