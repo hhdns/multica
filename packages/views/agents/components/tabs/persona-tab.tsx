@@ -910,7 +910,6 @@ function EmbeddingsSection({ workspaceId, canEdit }: { workspaceId: string; canE
   const rebuild = useMutation({
     mutationFn: () => api.rebuildWorkspaceEmbeddings(workspaceId),
     onSuccess: () => { setTimeout(() => rebuild.reset(), 4000); },
-    onError: () => { setTimeout(() => rebuild.reset(), 5000); },
   });
 
   useWSEvent("memory:embeddings_rebuilt", () => {
@@ -930,33 +929,40 @@ function EmbeddingsSection({ workspaceId, canEdit }: { workspaceId: string; canE
           Embedding model changed — existing vectors are stale and recall may be inaccurate.
         </p>
       )}
-      <div className="flex items-center gap-3 rounded-lg border bg-muted/30 px-4 py-3">
-        <div className="min-w-0 flex-1">
-          <p className="text-xs text-foreground">
-            Each memory carries a vector embedding used for semantic recall during tasks.{" "}
-            <span className="text-muted-foreground">Rebuild if you changed the embedding model or imported memories from another instance.</span>
-          </p>
-          {lastRebuiltLabel ? (
-            <p className="mt-0.5 text-[10px] text-muted-foreground">Last workspace rebuild: {lastRebuiltLabel}</p>
-          ) : (
-            <p className="mt-0.5 text-[10px] text-muted-foreground">Runs in the background — refresh the page after a minute to see updated results.</p>
+      <div className="flex flex-col gap-2 rounded-lg border bg-muted/30 px-4 py-3">
+        <div className="flex items-center gap-3">
+          <div className="min-w-0 flex-1">
+            <p className="text-xs text-foreground">
+              Each memory carries a vector embedding used for semantic recall during tasks.{" "}
+              <span className="text-muted-foreground">Rebuild if you changed the embedding model or imported memories from another instance.</span>
+            </p>
+            {lastRebuiltLabel ? (
+              <p className="mt-0.5 text-[10px] text-muted-foreground">Last workspace rebuild: {lastRebuiltLabel}</p>
+            ) : (
+              <p className="mt-0.5 text-[10px] text-muted-foreground">Runs in the background — refresh the page after a minute to see updated results.</p>
+            )}
+          </div>
+          {canEdit && (
+            <Button
+              size="sm"
+              variant={rebuild.isError ? "destructive" : "outline"}
+              className="shrink-0"
+              disabled={rebuild.isPending || rebuild.isSuccess}
+              onClick={() => rebuild.mutate()}
+            >
+              {rebuild.isPending ? (
+                <Loader2 className="mr-1.5 h-3.5 w-3.5 animate-spin" />
+              ) : (
+                <RefreshCw className="mr-1.5 h-3.5 w-3.5" />
+              )}
+              {rebuild.isPending ? "Rebuilding…" : rebuild.isSuccess ? "Queued" : rebuild.isError ? "Failed — retry?" : "Rebuild"}
+            </Button>
           )}
         </div>
-        {canEdit && (
-          <Button
-            size="sm"
-            variant={rebuild.isError ? "destructive" : "outline"}
-            className="shrink-0"
-            disabled={rebuild.isPending || rebuild.isSuccess}
-            onClick={() => rebuild.mutate()}
-          >
-            {rebuild.isPending ? (
-              <Loader2 className="mr-1.5 h-3.5 w-3.5 animate-spin" />
-            ) : (
-              <RefreshCw className="mr-1.5 h-3.5 w-3.5" />
-            )}
-            {rebuild.isPending ? "Rebuilding…" : rebuild.isSuccess ? "Queued" : rebuild.isError ? "Failed — retry?" : "Rebuild"}
-          </Button>
+        {rebuild.isError && (
+          <p className="text-[11px] text-destructive">
+            {rebuild.error instanceof Error ? rebuild.error.message : "Rebuild failed."}
+          </p>
         )}
       </div>
     </div>

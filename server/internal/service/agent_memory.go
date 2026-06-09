@@ -323,6 +323,49 @@ func Embed(ctx context.Context, text string) []float32 {
 	return nil
 }
 
+// ProbeEmbeddingModel sends a minimal request to the configured embedding
+// endpoint and returns an error if the model is unreachable or not loaded.
+// Used to give immediate feedback before starting an async rebuild.
+func ProbeEmbeddingModel(ctx context.Context) error {
+	cfg := resolveEmbedConfig()
+	if cfg.endpoint == "" {
+		return fmt.Errorf("embedding not configured (PERSONA_EMBEDDING_BASE_URL or PERSONA_SYNTHESIS_BASE_URL is unset)")
+	}
+
+	type embedRequest struct {
+		Model string `json:"model"`
+		Input string `json:"input"`
+	}
+	body, _ := json.Marshal(embedRequest{Model: cfg.model, Input: "ping"})
+
+	probeCtx, cancel := context.WithTimeout(ctx, 8*time.Second)
+	defer cancel()
+
+	req, err := http.NewRequestWithContext(probeCtx, http.MethodPost, cfg.endpoint, bytes.NewReader(body))
+	if err != nil {
+		return fmt.Errorf("build request: %w", err)
+	}
+	req.Header.Set("Content-Type", "application/json")
+	if cfg.apiKey != "" {
+		req.Header.Set("Authorization", "Bearer "+cfg.apiKey)
+	}
+
+	resp, err := (&http.Client{Timeout: 8 * time.Second}).Do(req)
+	if err != nil {
+		return fmt.Errorf("connect to embedding service: %w", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode == http.StatusNotFound {
+		return fmt.Errorf("model %q not found on embedding server (HTTP 404) — the model may still be downloading", cfg.model)
+	}
+	if resp.StatusCode >= 400 {
+		raw, _ := io.ReadAll(io.LimitReader(resp.Body, 512))
+		return fmt.Errorf("embedding server returned HTTP %d: %s", resp.StatusCode, strings.TrimSpace(string(raw)))
+	}
+	return nil
+}
+
 // RecordTaskMemory creates a memory entry after a task completes or fails.
 // Called as a goroutine from task completion handlers; errors are logged only.
 //

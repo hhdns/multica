@@ -589,6 +589,12 @@ func (h *Handler) RebuildEmbeddings(w http.ResponseWriter, r *http.Request) {
 	}
 
 	wsIDStr := uuidToString(wsID)
+
+	if err := service.ProbeEmbeddingModel(r.Context()); err != nil {
+		slog.Warn("rebuild embeddings: model probe failed", "workspace_id", wsIDStr, "error", err)
+		writeError(w, http.StatusServiceUnavailable, err.Error())
+		return
+	}
 	go func() {
 		ctx := context.Background()
 		if err := service.RebuildWorkspaceEmbeddings(ctx, h.Queries, wsID); err != nil {
