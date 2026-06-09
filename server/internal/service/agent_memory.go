@@ -1476,9 +1476,10 @@ func GetRecentChatContext(
 	}
 
 	var b strings.Builder
-	b.WriteString("## Platform-Provided Conversation Context\n\n")
-	b.WriteString("The Multica platform has retrieved the following recent exchanges for this session. ")
-	b.WriteString("Use this as context when the user references previous conversations.\n\n")
+	b.WriteString("## Recent Conversations\n\n")
+	b.WriteString("The following is your actual cross-session conversation history. ")
+	b.WriteString("When users ask what you discussed previously, reference this section directly — ")
+	b.WriteString("these are real past exchanges you were part of, not examples.\n\n")
 	var prevSession pgtype.UUID
 	for _, idx := range selected {
 		r := rows[idx]
