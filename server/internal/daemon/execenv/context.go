@@ -483,6 +483,9 @@ func renderIssueContext(provider string, ctx TaskContextForEnv) string {
 	if ctx.QuickCreatePrompt != "" {
 		return renderQuickCreateContext(ctx)
 	}
+	if ctx.ChatSessionID != "" {
+		return renderChatContext(ctx)
+	}
 
 	var b strings.Builder
 
@@ -498,6 +501,34 @@ func renderIssueContext(provider string, ctx TaskContextForEnv) string {
 
 	b.WriteString("## Quick Start\n\n")
 	fmt.Fprintf(&b, "Run `multica issue get %s --output json` to fetch the full issue details.\n\n", ctx.IssueID)
+
+	if len(ctx.AgentSkills) > 0 {
+		b.WriteString("## Agent Skills\n\n")
+		b.WriteString("The following skills are available to you:\n\n")
+		for _, skill := range ctx.AgentSkills {
+			fmt.Fprintf(&b, "- **%s**\n", skill.Name)
+		}
+		b.WriteString("\n")
+	}
+
+	return b.String()
+}
+
+// renderChatContext renders issue_context.md for direct chat-session tasks.
+// The conversation history (AgentMemoryContext) is embedded directly here so
+// the agent reads it as immediate file context rather than as instructions in
+// the runtime config — this reliably surfaces cross-session recall because the
+// agent actively reads this file at task start.
+func renderChatContext(ctx TaskContextForEnv) string {
+	var b strings.Builder
+	b.WriteString("# Chat Session\n\n")
+	fmt.Fprintf(&b, "**Session ID:** %s\n\n", ctx.ChatSessionID)
+	b.WriteString("This is a direct chat session. Respond to the user's message. Do not attempt to fetch issue details.\n\n")
+
+	if ctx.AgentMemoryContext != "" {
+		b.WriteString(ctx.AgentMemoryContext)
+		b.WriteString("\n\n")
+	}
 
 	if len(ctx.AgentSkills) > 0 {
 		b.WriteString("## Agent Skills\n\n")

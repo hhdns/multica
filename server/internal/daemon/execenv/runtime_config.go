@@ -170,22 +170,33 @@ func InjectRuntimeConfig(workDir, provider string, ctx TaskContextForEnv) (strin
 	return content, writeRuntimeConfigFile(path, content)
 }
 
+// runtimeConfigFileName returns just the filename (e.g. "CLAUDE.md") for the
+// provider's runtime config, or "" for unknown providers. Used by context
+// renderers that want to reference the file by name without needing workDir.
+func runtimeConfigFileName(provider string) string {
+	switch provider {
+	case "claude", "codebuddy":
+		return "CLAUDE.md"
+	case "codex", "copilot", "opencode", "openclaw", "hermes", "pi", "cursor", "kimi", "kiro", "antigravity":
+		return "AGENTS.md"
+	case "gemini":
+		return "GEMINI.md"
+	default:
+		return ""
+	}
+}
+
 // runtimeConfigPath returns the absolute path to the runtime config file that
 // InjectRuntimeConfig writes for the given provider, or "" when the provider
 // has no file-based config target. Centralising the mapping keeps Inject /
 // Cleanup in lockstep — both paths consult the same table so a new provider
 // added to one side cannot drift past the other.
 func runtimeConfigPath(workDir, provider string) string {
-	switch provider {
-	case "claude", "codebuddy":
-		return filepath.Join(workDir, "CLAUDE.md")
-	case "codex", "copilot", "opencode", "openclaw", "hermes", "pi", "cursor", "kimi", "kiro", "antigravity":
-		return filepath.Join(workDir, "AGENTS.md")
-	case "gemini":
-		return filepath.Join(workDir, "GEMINI.md")
-	default:
+	name := runtimeConfigFileName(provider)
+	if name == "" {
 		return ""
 	}
+	return filepath.Join(workDir, name)
 }
 
 // writeRuntimeConfigFile writes the Multica runtime brief to path without

@@ -1270,7 +1270,18 @@ func GetRecentChatContext(
 		WorkspaceID: workspaceID,
 		MsgLimit:    limit,
 	})
-	if err != nil || len(rows) == 0 {
+	if err != nil {
+		slog.Warn("GetRecentChatContext: query failed", "error", err,
+			"agent_id", agentID.Bytes,
+			"workspace_id", workspaceID.Bytes)
+		return ""
+	}
+	slog.Debug("GetRecentChatContext: query result",
+		"agent_id", agentID.Bytes,
+		"workspace_id", workspaceID.Bytes,
+		"row_count", len(rows),
+		"limit", limit)
+	if len(rows) == 0 {
 		return ""
 	}
 
@@ -1280,7 +1291,9 @@ func GetRecentChatContext(
 	}
 
 	var b strings.Builder
-	b.WriteString("## Recent Conversations\n\n")
+	b.WriteString("## Platform-Provided Conversation Context\n\n")
+	b.WriteString("The Multica platform has retrieved the following recent exchanges for this session. ")
+	b.WriteString("Use this as context when the user references previous conversations.\n\n")
 	var prevSession pgtype.UUID
 	for _, r := range rows {
 		if r.ChatSessionID != prevSession {
