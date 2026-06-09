@@ -86,28 +86,38 @@ func RebuildWorkspaceEmbeddings(ctx context.Context, q *db.Queries, workspaceID 
 		return fmt.Errorf("nullify embeddings: %w", err)
 	}
 
-	var offset int32
+	// Always query at OFFSET 0: records that get successfully embedded are
+	// removed from the NULL set, so the front of the list naturally advances.
+	// Using a fixed OFFSET would skip records that are still NULL after partial
+	// success in the previous batch.
+	// If an entire batch fails (embedding service down), stop to avoid looping.
 	for {
 		batch, err := q.ListMemoriesNeedingEmbedding(ctx, db.ListMemoriesNeedingEmbeddingParams{
 			WorkspaceID: workspaceID,
 			Limit:       rebuildBatchSize,
-			Offset:      offset,
+			Offset:      0,
 		})
 		if err != nil || len(batch) == 0 {
 			break
 		}
+		var succeeded int
 		for _, m := range batch {
 			vec := Embed(ctx, m.Content)
 			if vec == nil {
 				continue
 			}
-			_ = q.SetAgentMemoryEmbedding(ctx, db.SetAgentMemoryEmbeddingParams{
+			if err := q.SetAgentMemoryEmbedding(ctx, db.SetAgentMemoryEmbeddingParams{
 				ID:        m.ID,
 				Embedding: pgvector.NewVector(vec),
-			})
+			}); err == nil {
+				succeeded++
+			}
 		}
-		offset += int32(len(batch))
-		if len(batch) < rebuildBatchSize {
+		if succeeded == 0 {
+			// Embedding service is not responding; stop rather than loop forever.
+			slog.Warn("rebuild embeddings: batch produced no successes, stopping early",
+				"workspace_id", workspaceID.Bytes,
+				"remaining_null", len(batch))
 			break
 		}
 		time.Sleep(50 * time.Millisecond)
@@ -193,9 +203,12 @@ func resolveEmbedConfig() embedConfig {
 	return embedConfig{}
 }
 
+// embedMaxRetries is the number of additional attempts after the first failure.
+const embedMaxRetries = 2
+
 // Embed calls the configured embedding API and returns a float32 vector.
-// Returns nil when embedding is disabled or fails — callers store the memory
-// without a vector in that case.
+// Retries up to embedMaxRetries times with exponential backoff on transient
+// failures. Returns nil when embedding is disabled or all attempts fail.
 func Embed(ctx context.Context, text string) []float32 {
 	cfg := resolveEmbedConfig()
 	if cfg.endpoint == "" {
@@ -221,35 +234,58 @@ func Embed(ctx context.Context, text string) []float32 {
 		return nil
 	}
 
-	req, err := http.NewRequestWithContext(ctx, http.MethodPost, cfg.endpoint, bytes.NewReader(body))
-	if err != nil {
-		return nil
-	}
-	req.Header.Set("Content-Type", "application/json")
-	if cfg.apiKey != "" {
-		req.Header.Set("Authorization", "Bearer "+cfg.apiKey)
-	}
-
-	resp, err := (&http.Client{Timeout: 15 * time.Second}).Do(req)
-	if err != nil {
-		slog.Debug("embed: HTTP error", "error", err)
-		return nil
-	}
-	defer resp.Body.Close()
-
-	raw, err := io.ReadAll(resp.Body)
-	if err != nil {
-		return nil
-	}
-
-	var er embedResponse
-	if err := json.Unmarshal(raw, &er); err != nil || er.Error != nil || len(er.Data) == 0 {
-		if er.Error != nil {
-			slog.Debug("embed: API error", "message", er.Error.Message)
+	client := &http.Client{Timeout: 15 * time.Second}
+	var lastErr string
+	for attempt := 0; attempt <= embedMaxRetries; attempt++ {
+		if attempt > 0 {
+			delay := time.Duration(1<<uint(attempt-1)) * time.Second // 1s, 2s
+			select {
+			case <-ctx.Done():
+				return nil
+			case <-time.After(delay):
+			}
 		}
-		return nil
+
+		req, err := http.NewRequestWithContext(ctx, http.MethodPost, cfg.endpoint, bytes.NewReader(body))
+		if err != nil {
+			return nil
+		}
+		req.Header.Set("Content-Type", "application/json")
+		if cfg.apiKey != "" {
+			req.Header.Set("Authorization", "Bearer "+cfg.apiKey)
+		}
+
+		resp, err := client.Do(req)
+		if err != nil {
+			lastErr = err.Error()
+			continue
+		}
+
+		raw, err := io.ReadAll(resp.Body)
+		resp.Body.Close()
+		if err != nil {
+			lastErr = "read: " + err.Error()
+			continue
+		}
+
+		var er embedResponse
+		if err := json.Unmarshal(raw, &er); err != nil {
+			lastErr = "unmarshal: " + err.Error()
+			continue
+		}
+		if er.Error != nil {
+			lastErr = "API: " + er.Error.Message
+			continue
+		}
+		if len(er.Data) == 0 {
+			lastErr = fmt.Sprintf("empty data (HTTP %d)", resp.StatusCode)
+			continue
+		}
+		return er.Data[0].Embedding
 	}
-	return er.Data[0].Embedding
+
+	slog.Warn("embed: all attempts failed", "endpoint", cfg.endpoint, "attempts", embedMaxRetries+1, "last_error", lastErr)
+	return nil
 }
 
 // RecordTaskMemory creates a memory entry after a task completes or fails.

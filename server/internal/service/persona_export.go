@@ -193,7 +193,15 @@ func ImportPersona(
 		})
 	}
 
-	// Merge memories.
+	// Merge memories. Collect (id, content) pairs as we insert so we can embed
+	// them sequentially in a single goroutine — firing one goroutine per memory
+	// overwhelms self-hosted embedding services (Ollama etc.).
+	type memToEmbed struct {
+		id      pgtype.UUID
+		content string
+	}
+	var toEmbed []memToEmbed
+
 	for _, m := range bundle.Memories {
 		exists, checkErr := q.AgentMemoryContentExists(ctx, db.AgentMemoryContentExistsParams{
 			AgentID: agent.ID,
@@ -234,18 +242,26 @@ func ImportPersona(
 		}
 
 		imported++
+		toEmbed = append(toEmbed, memToEmbed{id: memID, content: m.Content})
+	}
 
-		// Enqueue embedding generation. Use a detached context so the goroutine
-		// is not cancelled when the HTTP request context expires.
-		go func(id pgtype.UUID, content string) {
-			vec := Embed(context.Background(), content)
-			if vec != nil {
-				_ = q.SetAgentMemoryEmbedding(context.Background(), db.SetAgentMemoryEmbeddingParams{
-					ID:        id,
-					Embedding: pgvector.NewVector(vec),
-				})
+	// Embed sequentially in one goroutine with a small pause between calls so
+	// self-hosted embedding services (Ollama, etc.) are not overwhelmed.
+	if len(toEmbed) > 0 {
+		go func(items []memToEmbed) {
+			for i, item := range items {
+				if i > 0 {
+					time.Sleep(100 * time.Millisecond)
+				}
+				vec := Embed(context.Background(), item.content)
+				if vec != nil {
+					_ = q.SetAgentMemoryEmbedding(context.Background(), db.SetAgentMemoryEmbeddingParams{
+						ID:        item.id,
+						Embedding: pgvector.NewVector(vec),
+					})
+				}
 			}
-		}(memID, m.Content)
+		}(toEmbed)
 	}
 
 	return imported, skipped, nil
