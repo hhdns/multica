@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 import { Loader2, Save, Sparkles, ThumbsUp, ThumbsDown, Plus, X, Wand2, ChevronDown, ChevronRight, Download, Upload, Pencil, Trash2, Check, RefreshCw } from "lucide-react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import type { Agent, AgentPersona, AgentMemory, PersonaLLMCall, UpdateAgentPersonaRequest } from "@multica/core/types";
@@ -369,6 +369,9 @@ function StrengthsSection({
   const [newStrength, setNewStrength] = useState("");
   const [newBlindSpot, setNewBlindSpot] = useState("");
 
+  useEffect(() => { setStrengths(persona.strengths); }, [persona.strengths]);
+  useEffect(() => { setBlindSpots(persona.blind_spots); }, [persona.blind_spots]);
+
   const isDirty =
     JSON.stringify(strengths) !== JSON.stringify(persona.strengths) ||
     JSON.stringify(blindSpots) !== JSON.stringify(persona.blind_spots);
@@ -475,6 +478,7 @@ function IdentitySection({
   saving: boolean;
 }) {
   const [value, setValue] = useState(persona.identity ?? "");
+  useEffect(() => { setValue(persona.identity ?? ""); }, [persona.identity]);
   const isDirty = value !== (persona.identity ?? "");
 
   return (
@@ -514,6 +518,7 @@ function VarianceSection({
   saving: boolean;
 }) {
   const [value, setValue] = useState(persona.variance_level);
+  useEffect(() => { setValue(persona.variance_level); }, [persona.variance_level]);
   const isDirty = value !== persona.variance_level;
 
   return (
@@ -560,6 +565,7 @@ function EpisodeRecallSection({
   saving: boolean;
 }) {
   const [value, setValue] = useState(persona.episode_recall_count ?? 5);
+  useEffect(() => { setValue(persona.episode_recall_count ?? 5); }, [persona.episode_recall_count]);
   const isDirty = value !== (persona.episode_recall_count ?? 5);
 
   return (
