@@ -55,6 +55,9 @@ type AppConfig struct {
 	// with the current model and semantic memory search will return bad results.
 	// Cleared after a successful rebuild via POST /api/workspaces/{id}/memories/rebuild-embeddings.
 	EmbeddingModelStale bool `json:"embedding_model_stale,omitempty"`
+	// EmbeddingLastRebuiltAt is the RFC3339 timestamp of the most recent successful
+	// embedding rebuild. Omitted when no rebuild has been recorded.
+	EmbeddingLastRebuiltAt string `json:"embedding_last_rebuilt_at,omitempty"`
 }
 
 // GetConfig is mounted on the public (unauthenticated) route group because
@@ -74,6 +77,9 @@ func (h *Handler) GetConfig(w http.ResponseWriter, r *http.Request) {
 	config.DaemonServerURL, config.DaemonAppURL = daemonSetupURLsFromEnv()
 	config.PersonaSynthesisBackend = service.ResolveSynthesisBackend()
 	config.EmbeddingModelStale = service.IsEmbeddingModelStale()
+	if t := service.GetEmbeddingLastRebuiltAt(); t != nil {
+		config.EmbeddingLastRebuiltAt = t.Format("2006-01-02T15:04:05Z07:00")
+	}
 
 	// Re-read from env on every request so operators can rotate keys via
 	// secret refresh without a server restart.

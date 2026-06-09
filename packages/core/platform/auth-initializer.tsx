@@ -65,6 +65,7 @@ export function AuthInitializer({
           // Old servers omit this field — treat absence as "" (disabled).
           personaSynthesisBackend: cfg.persona_synthesis_backend ?? "",
           embeddingModelStale: cfg.embedding_model_stale === true,
+          embeddingLastRebuiltAt: cfg.embedding_last_rebuilt_at ?? null,
         });
         configStore.getState().setDaemonConfig({
           daemonServerUrl: cfg.daemon_server_url,

@@ -896,9 +896,10 @@ function MemoriesSection({ agentId, canEdit }: { agentId: string; canEdit: boole
 }
 
 function EmbeddingsSection({ workspaceId, canEdit }: { workspaceId: string; canEdit: boolean }) {
-  const [lastRebuiltAt, setLastRebuiltAt] = useState<Date | null>(null);
   const embeddingModelStale = useConfigStore((s) => s.embeddingModelStale);
   const setEmbeddingModelStale = useConfigStore((s) => s.setEmbeddingModelStale);
+  const embeddingLastRebuiltAt = useConfigStore((s) => s.embeddingLastRebuiltAt);
+  const setEmbeddingLastRebuiltAt = useConfigStore((s) => s.setEmbeddingLastRebuiltAt);
 
   const rebuild = useMutation({
     mutationFn: () => api.rebuildWorkspaceEmbeddings(workspaceId),
@@ -907,9 +908,13 @@ function EmbeddingsSection({ workspaceId, canEdit }: { workspaceId: string; canE
   });
 
   useWSEvent("memory:embeddings_rebuilt", () => {
-    setLastRebuiltAt(new Date());
+    setEmbeddingLastRebuiltAt(new Date().toISOString());
     setEmbeddingModelStale(false);
   });
+
+  const lastRebuiltLabel = embeddingLastRebuiltAt
+    ? new Date(embeddingLastRebuiltAt).toLocaleString(undefined, { month: "short", day: "numeric", hour: "2-digit", minute: "2-digit" })
+    : null;
 
   return (
     <div className="flex flex-col gap-2">
@@ -925,8 +930,8 @@ function EmbeddingsSection({ workspaceId, canEdit }: { workspaceId: string; canE
             Each memory carries a vector embedding used for semantic recall during tasks.{" "}
             <span className="text-muted-foreground">Rebuild if you changed the embedding model or imported memories from another instance.</span>
           </p>
-          {lastRebuiltAt ? (
-            <p className="mt-0.5 text-[10px] text-muted-foreground">Last rebuilt: {lastRebuiltAt.toLocaleTimeString()}</p>
+          {lastRebuiltLabel ? (
+            <p className="mt-0.5 text-[10px] text-muted-foreground">Last rebuilt: {lastRebuiltLabel}</p>
           ) : (
             <p className="mt-0.5 text-[10px] text-muted-foreground">Runs in the background — refresh the page after a minute to see updated results.</p>
           )}

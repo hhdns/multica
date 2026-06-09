@@ -46,6 +46,12 @@ const (
 // and cleared after a successful rebuild. Read by GetConfig without a DB query.
 var embeddingModelStale atomic.Bool
 
+// embeddingLastRebuiltAt holds the UTC time of the most recent successful
+// rebuild. Initialised from system_config on startup; updated after each rebuild.
+var embeddingLastRebuiltAt atomic.Pointer[time.Time]
+
+const embeddingLastRebuiltAtKey = "embedding_last_rebuilt_at"
+
 // CurrentEmbeddingModel returns the embedding model name from env, defaulting
 // to bge-m3 — the same default used by resolveEmbedConfig.
 func CurrentEmbeddingModel() string {
@@ -57,6 +63,7 @@ func CurrentEmbeddingModel() string {
 
 // InitEmbeddingModelCheck compares the live embedding model against the value
 // stored in system_config and sets the in-memory stale flag accordingly.
+// Also restores the last-rebuilt timestamp from system_config.
 // Call once during server startup after the DB is reachable.
 func InitEmbeddingModelCheck(ctx context.Context, q *db.Queries) {
 	stored, err := q.GetSystemConfig(ctx, embeddingModelConfigKey)
@@ -69,6 +76,18 @@ func InitEmbeddingModelCheck(ctx context.Context, q *db.Queries) {
 		return
 	}
 	embeddingModelStale.Store(stored != CurrentEmbeddingModel())
+
+	if ts, err := q.GetSystemConfig(ctx, embeddingLastRebuiltAtKey); err == nil {
+		if t, err := time.Parse(time.RFC3339, ts); err == nil {
+			embeddingLastRebuiltAt.Store(&t)
+		}
+	}
+}
+
+// GetEmbeddingLastRebuiltAt returns the UTC time of the most recent successful
+// embedding rebuild, or nil if no rebuild has been recorded.
+func GetEmbeddingLastRebuiltAt() *time.Time {
+	return embeddingLastRebuiltAt.Load()
 }
 
 // IsEmbeddingModelStale returns true when the embedding model has changed
@@ -123,11 +142,17 @@ func RebuildWorkspaceEmbeddings(ctx context.Context, q *db.Queries, workspaceID 
 		time.Sleep(50 * time.Millisecond)
 	}
 
-	// Record the new model as current and clear the stale flag.
+	// Record the new model, timestamp, and clear the stale flag.
+	now := time.Now().UTC()
 	_ = q.UpsertSystemConfig(ctx, db.UpsertSystemConfigParams{
 		Key:   embeddingModelConfigKey,
 		Value: CurrentEmbeddingModel(),
 	})
+	_ = q.UpsertSystemConfig(ctx, db.UpsertSystemConfigParams{
+		Key:   embeddingLastRebuiltAtKey,
+		Value: now.Format(time.RFC3339),
+	})
+	embeddingLastRebuiltAt.Store(&now)
 	embeddingModelStale.Store(false)
 	return nil
 }

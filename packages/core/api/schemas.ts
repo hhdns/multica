@@ -44,6 +44,7 @@ export interface AppConfigResponse {
   persona_synthesis_backend?: string;
   // true when PERSONA_EMBEDDING_MODEL changed since embeddings were last generated.
   embedding_model_stale?: boolean;
+  embedding_last_rebuilt_at?: string;
 }
 
 // ---------------------------------------------------------------------------
@@ -186,6 +187,7 @@ export const AppConfigSchema = z.object({
   workspace_creation_disabled: BooleanWithDefaultSchema(false).optional(),
   persona_synthesis_backend: OptionalStringSchema,
   embedding_model_stale: z.boolean().optional(),
+  embedding_last_rebuilt_at: z.string().optional(),
 }).loose();
 
 export const EMPTY_APP_CONFIG: AppConfigResponse = {

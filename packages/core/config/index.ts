@@ -21,6 +21,7 @@ interface ConfigState {
   // true when PERSONA_EMBEDDING_MODEL changed since embeddings were generated —
   // old vectors are incompatible and semantic memory search will return garbage.
   embeddingModelStale: boolean;
+  embeddingLastRebuiltAt: string | null;
   setCdnConfig: (config: { cdnDomain: string; cdnSigned?: boolean }) => void;
   setAuthConfig: (config: {
     allowSignup: boolean;
@@ -28,8 +29,10 @@ interface ConfigState {
     workspaceCreationDisabled?: boolean;
     personaSynthesisBackend?: string;
     embeddingModelStale?: boolean;
+    embeddingLastRebuiltAt?: string | null;
   }) => void;
   setEmbeddingModelStale: (stale: boolean) => void;
+  setEmbeddingLastRebuiltAt: (ts: string) => void;
   setDaemonConfig: (config: {
     daemonServerUrl?: string;
     daemonAppUrl?: string;
@@ -46,6 +49,7 @@ export const configStore = createStore<ConfigState>((set) => ({
   workspaceCreationDisabled: false,
   personaSynthesisBackend: "",
   embeddingModelStale: false,
+  embeddingLastRebuiltAt: null,
   setCdnConfig: ({ cdnDomain, cdnSigned = false }) => set({ cdnDomain, cdnSigned }),
   setAuthConfig: ({
     allowSignup,
@@ -53,8 +57,10 @@ export const configStore = createStore<ConfigState>((set) => ({
     workspaceCreationDisabled = false,
     personaSynthesisBackend = "",
     embeddingModelStale = false,
-  }) => set({ allowSignup, googleClientId, workspaceCreationDisabled, personaSynthesisBackend, embeddingModelStale }),
+    embeddingLastRebuiltAt = null,
+  }) => set({ allowSignup, googleClientId, workspaceCreationDisabled, personaSynthesisBackend, embeddingModelStale, embeddingLastRebuiltAt }),
   setEmbeddingModelStale: (stale) => set({ embeddingModelStale: stale }),
+  setEmbeddingLastRebuiltAt: (ts) => set({ embeddingLastRebuiltAt: ts }),
   setDaemonConfig: ({ daemonServerUrl = "", daemonAppUrl = "" }) =>
     set({ daemonServerUrl, daemonAppUrl }),
 }));
