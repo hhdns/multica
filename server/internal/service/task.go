@@ -739,6 +739,22 @@ func (s *TaskService) EnqueueChatTask(ctx context.Context, chatSession db.ChatSe
 	return task, nil
 }
 
+// CancelGroupChatPreviousRound cancels all in-flight tasks for a group chat
+// session. Called at the start of each new user message so stale tasks from
+// the previous round don't post out-of-order replies.
+func (s *TaskService) CancelGroupChatPreviousRound(ctx context.Context, chatSessionID pgtype.UUID) {
+	cancelled, err := s.Queries.CancelAgentTasksByChatSession(ctx, chatSessionID)
+	if err != nil {
+		slog.Warn("group chat: cancel previous round failed", "session_id", util.UUIDToString(chatSessionID), "error", err)
+		return
+	}
+	for _, t := range cancelled {
+		s.captureTaskCancelled(ctx, t)
+		s.ReconcileAgentStatus(ctx, t.AgentID)
+		s.broadcastTaskEvent(ctx, protocol.EventTaskCancelled, t)
+	}
+}
+
 // EnqueueGroupChatTasks creates one queued task per target agent in a group
 // chat session. Each task is independent — the daemon runtime for each agent
 // claims and executes its own task. Agents that are archived or have no runtime
@@ -1351,7 +1367,8 @@ func (s *TaskService) CompleteTask(ctx context.Context, taskID pgtype.UUID, resu
 	if task.ChatSessionID.Valid {
 		var assistantMsg *db.ChatMessage
 		var payload protocol.TaskCompletedPayload
-		if err := json.Unmarshal(result, &payload); err == nil && payload.Output != "" {
+		if err := json.Unmarshal(result, &payload); err == nil && payload.Output != "" &&
+			strings.TrimSpace(payload.Output) != "[SILENT]" {
 			// Same unescape as the issue-comment path above: literal `\n` from
 			// agent stdout becomes a real newline so the chat panel renders
 			// paragraph breaks instead of one wall of prose.

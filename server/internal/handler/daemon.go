@@ -1522,25 +1522,53 @@ func (h *Handler) ClaimTaskByRuntime(w http.ResponseWriter, r *http.Request) {
 					}
 				}
 			}
-			// Build the chat prompt from EVERY user message that has arrived
-			// since the agent's last reply — not just the most recent one. A
-			// short-window debounce (MUL-2968) can land several user messages
-			// before a single run fires; the agent resumes its prior session
-			// and only learns of new input through resp.ChatMessage, so
-			// delivering just the latest message would silently drop the
-			// earlier ones (e.g. "看上海天气" then "还有青岛" → only Qingdao
-			// answered). The unanswered set is the trailing run of user
-			// messages after the last assistant message (every completed or
-			// failed run writes an assistant row, so that anchor advances each
-			// turn). Attachments are collected from each included message so
-			// the agent can `multica attachment download <id>` — the markdown
-			// URL alone is signed and 30-min expiring on the private CDN.
+			// Build the chat prompt delivered to the agent this turn.
+			//
+			// Single-agent sessions: only trailing user messages after the last
+			// assistant reply (see trailingUserMessages). The agent's prior
+			// session carries the full history; we just deliver what's new.
+			//
+			// Group sessions: include a windowed history (user + other agents'
+			// replies) so each agent can see what peers said and respond in
+			// context. Messages are labeled "[User]:" / "[AgentName]:" so the
+			// agent can attribute each turn. [SILENT] sentinels are stripped.
+			// Capped at groupChatHistoryWindow entries to bound token usage.
 			if msgs, err := h.Queries.ListChatMessages(r.Context(), cs.ID); err == nil && len(msgs) > 0 {
-				unanswered := trailingUserMessages(msgs)
-				parts := make([]string, 0, len(unanswered))
-				for _, m := range unanswered {
-					if strings.TrimSpace(m.Content) != "" {
-						parts = append(parts, m.Content)
+				isGroup := cs.IsGroup && resp.Agent != nil
+				var window []db.ChatMessage
+				if isGroup {
+					window = groupChatNewContext(msgs, parseUUID(resp.Agent.ID))
+				} else {
+					window = trailingUserMessages(msgs)
+				}
+				parts := make([]string, 0, len(window))
+				for _, m := range window {
+					var line string
+					if isGroup {
+						switch m.Role {
+						case "user":
+							if strings.TrimSpace(m.Content) != "" {
+								line = "[User]: " + m.Content
+							}
+						case "assistant":
+							trimmed := strings.TrimSpace(m.Content)
+							if trimmed != "" && trimmed != "[SILENT]" {
+								agentName := "Agent"
+								if m.AgentID.Valid {
+									if a, aErr := h.Queries.GetAgent(r.Context(), m.AgentID); aErr == nil {
+										agentName = a.Name
+									}
+								}
+								line = "[" + agentName + "]: " + m.Content
+							}
+						}
+					} else {
+						if strings.TrimSpace(m.Content) != "" {
+							line = m.Content
+						}
+					}
+					if line != "" {
+						parts = append(parts, line)
 					}
 					if atts, attErr := h.Queries.ListAttachmentsByChatMessage(r.Context(), db.ListAttachmentsByChatMessageParams{
 						ChatMessageID: m.ID,
@@ -1557,7 +1585,18 @@ func (h *Handler) ClaimTaskByRuntime(w http.ResponseWriter, r *http.Request) {
 				}
 				resp.ChatMessage = strings.Join(parts, "\n\n")
 				if strings.TrimSpace(resp.ThreadName) == "" {
-					resp.ThreadName = resp.ChatMessage
+					if isGroup {
+						// ThreadName: use the latest user message, not the labeled window.
+						for i := len(msgs) - 1; i >= 0; i-- {
+							if msgs[i].Role == "user" && strings.TrimSpace(msgs[i].Content) != "" {
+								resp.ThreadName = msgs[i].Content
+								break
+							}
+						}
+					}
+					if strings.TrimSpace(resp.ThreadName) == "" {
+						resp.ThreadName = resp.ChatMessage
+					}
 				}
 			}
 		}
@@ -1765,12 +1804,17 @@ func (h *Handler) ClaimTaskByRuntime(w http.ResponseWriter, r *http.Request) {
 						peerNames = append(peerNames, a.Name)
 					}
 				}
-				if len(peerNames) > 0 {
-					block := "## Group Chat\n\nYou are in a group conversation with: " + strings.Join(peerNames, ", ") + ".\n" +
-						"Other agents may also respond to messages in this session.\n" +
-						"Respond to messages directed at you via @mention, or as the current relay agent."
-					appendMemCtx(&resp.Agent.MemoryContext, block)
-				}
+				allNames := append([]string{resp.Agent.Name}, peerNames...)
+				block := "## Active Group Chat Session\n\n" +
+					"You are agent \"" + resp.Agent.Name + "\" in a group chat with: " + strings.Join(allNames, ", ") + ".\n\n" +
+					"Every message is broadcast to all agents simultaneously. You must decide for yourself " +
+					"whether you have something meaningful to contribute:\n" +
+					"- If you want to respond, reply normally.\n" +
+					"- If you have nothing relevant to add (the message is addressed to someone else, " +
+					"another agent already covered it, or the topic is outside your expertise), " +
+					"output ONLY the token \"[SILENT]\" and nothing else. Do not explain why you are staying silent.\n\n" +
+					"Respond as yourself — don't speak for other agents or predict what they will say."
+				appendMemCtx(&resp.Agent.MemoryContext, block)
 			}
 		}
 	}
@@ -1939,6 +1983,38 @@ func trailingUserMessages(msgs []db.ChatMessage) []db.ChatMessage {
 		}
 	}
 	return msgs[start:]
+}
+
+// groupChatHistoryWindow is the maximum number of chat messages included in
+// the context delivered to each agent during a group session. Caps token usage
+// without meaningfully restricting conversational coherence for typical group
+// sessions (≤ 20 recent turns covers the vast majority of real exchanges).
+const groupChatHistoryWindow = 20
+
+// groupChatNewContext returns the messages an agent should receive as new
+// context in a group chat task. Unlike trailingUserMessages (user messages
+// only), it includes other agents' replies so each participant can see the
+// full recent conversation — enabling natural back-and-forth between agents.
+//
+// The window starts immediately after this agent's last reply so the agent's
+// prior session is not duplicated. Capped at groupChatHistoryWindow entries.
+func groupChatNewContext(msgs []db.ChatMessage, agentID pgtype.UUID) []db.ChatMessage {
+	lastOwnIdx := -1
+	for i := len(msgs) - 1; i >= 0; i-- {
+		if msgs[i].Role == "assistant" && msgs[i].AgentID == agentID {
+			lastOwnIdx = i
+			break
+		}
+	}
+	startIdx := 0
+	if lastOwnIdx >= 0 {
+		startIdx = lastOwnIdx + 1
+	}
+	window := msgs[startIdx:]
+	if len(window) > groupChatHistoryWindow {
+		window = window[len(window)-groupChatHistoryWindow:]
+	}
+	return window
 }
 
 // ListPendingTasksByRuntime returns queued/dispatched tasks for a runtime.
@@ -2409,6 +2485,25 @@ func (h *Handler) maybeGenerateArcEpisode(
 	wsUUID := parseUUID(workspaceID)
 	service.GenerateConversationEpisode(ctx, h.Queries, task.AgentID, wsUUID, task.ID,
 		task.ChatSessionID, initiatorName)
+
+	// For group sessions, generate an episode for every other participant so
+	// all agents build memory from the shared conversation.
+	cs, err := h.Queries.GetChatSession(ctx, task.ChatSessionID)
+	if err != nil || !cs.IsGroup {
+		return
+	}
+	participantIDs, err := h.Queries.GetChatSessionParticipants(ctx, cs.ID)
+	if err != nil {
+		return
+	}
+	for _, pid := range participantIDs {
+		if pid == task.AgentID {
+			continue
+		}
+		peerID := pid
+		go service.GenerateConversationEpisode(ctx, h.Queries, peerID, wsUUID, task.ID,
+			task.ChatSessionID, initiatorName)
+	}
 }
 
 // ---------------------------------------------------------------------------
