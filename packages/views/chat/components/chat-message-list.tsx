@@ -1,9 +1,9 @@
 "use client";
 
-import { useCallback, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { toast } from "sonner";
 import { useQuery } from "@tanstack/react-query";
-import { Virtuoso } from "react-virtuoso";
+import { Virtuoso, type VirtuosoHandle } from "react-virtuoso";
 import { cn } from "@multica/ui/lib/utils";
 import { Skeleton } from "@multica/ui/components/ui/skeleton";
 import { Button } from "@multica/ui/components/ui/button";
@@ -64,6 +64,7 @@ export function ChatMessageList({
   onLoadOlderMessages,
 }: ChatMessageListProps) {
   const scrollRef = useRef<HTMLDivElement>(null);
+  const virtuosoRef = useRef<VirtuosoHandle>(null);
   const [scrollContainerEl, setScrollContainerEl] = useState<HTMLDivElement | null>(null);
   const [isNearBottom, setIsNearBottom] = useState(true);
   const setScrollContainerRef = useCallback((node: HTMLDivElement | null) => {
@@ -72,6 +73,21 @@ export function ChatMessageList({
   }, []);
   const fadeStyle = useScrollFade(scrollRef);
   const { t } = useT("chat");
+
+  // Scroll to bottom whenever a new message is appended (agent reply landed).
+  // Loading older messages increases messages.length too, but also lowers
+  // firstItemIndex — we use that to tell the two cases apart.
+  const prevMsgLen = useRef(messages.length);
+  const prevFirstItemIndex = useRef(firstItemIndex);
+  useEffect(() => {
+    const addedNew = messages.length > prevMsgLen.current;
+    const loadedOlder = firstItemIndex < prevFirstItemIndex.current;
+    prevMsgLen.current = messages.length;
+    prevFirstItemIndex.current = firstItemIndex;
+    if (addedNew && !loadedOlder) {
+      virtuosoRef.current?.scrollToIndex({ index: "LAST", behavior: "smooth" });
+    }
+  }, [messages.length, firstItemIndex]);
 
   const activeTasks = Object.values(pendingTasksMap);
   const hasPendingRows = activeTasks.length > 0;
@@ -91,6 +107,7 @@ export function ChatMessageList({
         </div>
       ) : (
       <Virtuoso
+        ref={virtuosoRef}
         customScrollParent={scrollContainerEl}
         data={messages}
         firstItemIndex={firstIndex}
