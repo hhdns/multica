@@ -62,6 +62,10 @@ type AppConfig struct {
 	// (Slack/iMessage style) instead of inserting a newline. Defaults to false.
 	// Set CHAT_ENTER_TO_SEND=true to enable instance-wide.
 	ChatEnterToSend bool `json:"chat_enter_to_send,omitempty"`
+	// IssueEnterToSend controls whether bare Enter submits an issue comment
+	// (Slack/iMessage style) instead of inserting a newline. Defaults to false.
+	// Set ISSUE_ENTER_TO_SEND=true to enable instance-wide.
+	IssueEnterToSend bool `json:"issue_enter_to_send,omitempty"`
 }
 
 // GetConfig is mounted on the public (unauthenticated) route group because
@@ -74,6 +78,7 @@ func (h *Handler) GetConfig(w http.ResponseWriter, r *http.Request) {
 		GoogleClientID:            os.Getenv("GOOGLE_CLIENT_ID"),
 		WorkspaceCreationDisabled: os.Getenv("DISABLE_WORKSPACE_CREATION") == "true",
 		ChatEnterToSend:           os.Getenv("CHAT_ENTER_TO_SEND") == "true",
+		IssueEnterToSend:          os.Getenv("ISSUE_ENTER_TO_SEND") == "true",
 	}
 	if h.Storage != nil {
 		config.CdnDomain = h.Storage.CdnDomain()

@@ -47,6 +47,8 @@ export interface AppConfigResponse {
   embedding_last_rebuilt_at?: string;
   // When true, bare Enter submits chat messages (Slack style). Default false.
   chat_enter_to_send?: boolean;
+  // When true, bare Enter submits issue comments (Slack style). Default false.
+  issue_enter_to_send?: boolean;
 }
 
 // ---------------------------------------------------------------------------
@@ -191,6 +193,7 @@ export const AppConfigSchema = z.object({
   embedding_model_stale: z.boolean().optional(),
   embedding_last_rebuilt_at: z.string().optional(),
   chat_enter_to_send: BooleanWithDefaultSchema(false).optional(),
+  issue_enter_to_send: BooleanWithDefaultSchema(false).optional(),
 }).loose();
 
 export const EMPTY_APP_CONFIG: AppConfigResponse = {

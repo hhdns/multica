@@ -11,6 +11,7 @@ import type { Attachment } from "@multica/core/types";
 import { contentReferencesAttachment } from "@multica/core/types";
 import { enterKey, formatShortcut, modKey } from "@multica/core/platform";
 import { useCommentDraftStore } from "@multica/core/issues/stores";
+import { useConfigStore } from "@multica/core/config";
 import { useT } from "../../i18n";
 import { CommentTriggerChips } from "./comment-trigger-chips";
 import { useCommentTriggerPreview } from "../hooks/use-comment-trigger-preview";
@@ -25,6 +26,7 @@ interface CommentInputProps {
 
 function CommentInput({ issueId, onSubmit }: CommentInputProps) {
   const { t } = useT("issues");
+  const submitOnEnter = useConfigStore((s) => s.issueEnterToSend);
   const editorRef = useRef<ContentEditorRef>(null);
   // Read the persisted draft once on mount. ContentEditor only honors
   // `defaultValue` at mount time, so this snapshot drives both the editor's
@@ -169,6 +171,7 @@ function CommentInput({ issueId, onSubmit }: CommentInputProps) {
           attachments={pendingAttachments}
           enableSlashCommands
           slashCommandMode="command"
+          submitOnEnter={submitOnEnter}
         />
       </div>
       <div className="absolute bottom-1 left-2 right-28 min-w-0">

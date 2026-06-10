@@ -11,6 +11,7 @@ import { api } from "@multica/core/api";
 import type { Attachment } from "@multica/core/types";
 import { contentReferencesAttachment } from "@multica/core/types";
 import { useCommentDraftStore, type CommentDraftKey } from "@multica/core/issues/stores";
+import { useConfigStore } from "@multica/core/config";
 import { cn } from "@multica/ui/lib/utils";
 import { useT } from "../../i18n";
 import { CommentTriggerChips } from "./comment-trigger-chips";
@@ -51,6 +52,7 @@ function ReplyInput({
   draftKey,
 }: ReplyInputProps) {
   const { t } = useT("issues");
+  const submitOnEnter = useConfigStore((s) => s.issueEnterToSend);
   const placeholderText = placeholder ?? t(($) => $.reply.placeholder);
   const editorRef = useRef<ContentEditorRef>(null);
   // If a draft key is provided, hydrate from store on mount (defaultValue is
@@ -196,6 +198,7 @@ function ReplyInput({
             attachments={pendingAttachments}
             enableSlashCommands
             slashCommandMode="command"
+            submitOnEnter={submitOnEnter}
           />
         </div>
         <div className="absolute bottom-0 left-0 right-24 min-w-0">

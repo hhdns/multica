@@ -24,6 +24,8 @@ interface ConfigState {
   embeddingLastRebuiltAt: string | null;
   // When true, bare Enter submits chat messages (Slack style). Default false.
   chatEnterToSend: boolean;
+  // When true, bare Enter submits issue comments (Slack style). Default false.
+  issueEnterToSend: boolean;
   setCdnConfig: (config: { cdnDomain: string; cdnSigned?: boolean }) => void;
   setAuthConfig: (config: {
     allowSignup: boolean;
@@ -33,6 +35,7 @@ interface ConfigState {
     embeddingModelStale?: boolean;
     embeddingLastRebuiltAt?: string | null;
     chatEnterToSend?: boolean;
+    issueEnterToSend?: boolean;
   }) => void;
   setEmbeddingModelStale: (stale: boolean) => void;
   setEmbeddingLastRebuiltAt: (ts: string) => void;
@@ -54,6 +57,7 @@ export const configStore = createStore<ConfigState>((set) => ({
   embeddingModelStale: false,
   embeddingLastRebuiltAt: null,
   chatEnterToSend: false,
+  issueEnterToSend: false,
   setCdnConfig: ({ cdnDomain, cdnSigned = false }) => set({ cdnDomain, cdnSigned }),
   setAuthConfig: ({
     allowSignup,
@@ -63,7 +67,8 @@ export const configStore = createStore<ConfigState>((set) => ({
     embeddingModelStale = false,
     embeddingLastRebuiltAt = null,
     chatEnterToSend = false,
-  }) => set({ allowSignup, googleClientId, workspaceCreationDisabled, personaSynthesisBackend, embeddingModelStale, embeddingLastRebuiltAt, chatEnterToSend }),
+    issueEnterToSend = false,
+  }) => set({ allowSignup, googleClientId, workspaceCreationDisabled, personaSynthesisBackend, embeddingModelStale, embeddingLastRebuiltAt, chatEnterToSend, issueEnterToSend }),
   setEmbeddingModelStale: (stale) => set({ embeddingModelStale: stale }),
   setEmbeddingLastRebuiltAt: (ts) => set({ embeddingLastRebuiltAt: ts }),
   setDaemonConfig: ({ daemonServerUrl = "", daemonAppUrl = "" }) =>

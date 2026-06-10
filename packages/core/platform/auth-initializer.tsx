@@ -67,6 +67,7 @@ export function AuthInitializer({
           embeddingModelStale: cfg.embedding_model_stale === true,
           embeddingLastRebuiltAt: cfg.embedding_last_rebuilt_at ?? null,
           chatEnterToSend: cfg.chat_enter_to_send === true,
+          issueEnterToSend: cfg.issue_enter_to_send === true,
         });
         configStore.getState().setDaemonConfig({
           daemonServerUrl: cfg.daemon_server_url,
