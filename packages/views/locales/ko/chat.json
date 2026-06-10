@@ -129,7 +129,7 @@
     "select_agents": "에이전트 선택",
     "routing_label": "@멘션이 없을 때",
     "routing_mention": "조용히 있기",
-    "routing_relay": "마지막 응답자가 계속",
+    "routing_relay": "에이전트가 결정",
     "start": "시작",
     "indicator": "그룹 · {count}"
   }

@@ -126,7 +126,7 @@
     "select_agents": "选择成员",
     "routing_label": "没有人被 @ 时",
     "routing_mention": "保持沉默",
-    "routing_relay": "上一个回复者继续",
+    "routing_relay": "由 Agent 自行决定",
     "start": "发起",
     "indicator": "群聊 · {count}"
   }

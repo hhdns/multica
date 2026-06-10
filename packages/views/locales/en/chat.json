@@ -129,7 +129,7 @@
     "select_agents": "Select agents",
     "routing_label": "When no one is @mentioned",
     "routing_mention": "Stay silent",
-    "routing_relay": "Last responder continues",
+    "routing_relay": "Agents decide",
     "start": "Start",
     "indicator": "Group · {count}"
   }

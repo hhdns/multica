@@ -126,7 +126,7 @@
     "select_agents": "エージェントを選択",
     "routing_label": "@メンションがない場合",
     "routing_mention": "黙認する",
-    "routing_relay": "最後の返信者が続ける",
+    "routing_relay": "エージェントが判断",
     "start": "開始",
     "indicator": "グループ · {count}"
   }
