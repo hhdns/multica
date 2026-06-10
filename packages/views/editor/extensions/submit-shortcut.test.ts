@@ -28,7 +28,7 @@ describe("createSubmitExtension", () => {
   it("Mod-Enter always submits", () => {
     const onSubmit = vi.fn(() => true);
     const shortcuts = getShortcuts(
-      createSubmitExtension(onSubmit, { submitOnEnter: false }),
+      createSubmitExtension(onSubmit, { submitOnEnterRef: { current: false } }),
       baseEditor,
     );
 
@@ -37,21 +37,22 @@ describe("createSubmitExtension", () => {
     expect(onSubmit).toHaveBeenCalledTimes(1);
   });
 
-  it("bare Enter is not bound when submitOnEnter is false", () => {
+  it("bare Enter is always bound but returns false when ref is false", () => {
     const onSubmit = vi.fn(() => true);
     const shortcuts = getShortcuts(
-      createSubmitExtension(onSubmit, { submitOnEnter: false }),
+      createSubmitExtension(onSubmit, { submitOnEnterRef: { current: false } }),
       baseEditor,
     );
 
-    expect(shortcuts.Enter).toBeUndefined();
+    expect(shortcuts.Enter).toBeDefined();
+    expect(shortcuts.Enter!()).toBe(false);
     expect(onSubmit).not.toHaveBeenCalled();
   });
 
-  it("bare Enter submits when submitOnEnter is true", () => {
+  it("bare Enter submits when ref is true", () => {
     const onSubmit = vi.fn(() => true);
     const shortcuts = getShortcuts(
-      createSubmitExtension(onSubmit, { submitOnEnter: true }),
+      createSubmitExtension(onSubmit, { submitOnEnterRef: { current: true } }),
       baseEditor,
     );
 
@@ -63,7 +64,7 @@ describe("createSubmitExtension", () => {
   it("Enter is suppressed during IME composition", () => {
     const onSubmit = vi.fn(() => true);
     const shortcuts = getShortcuts(
-      createSubmitExtension(onSubmit, { submitOnEnter: true }),
+      createSubmitExtension(onSubmit, { submitOnEnterRef: { current: true } }),
       {
         view: { composing: true } as unknown as Editor["view"],
         isActive: () => false,
@@ -77,7 +78,7 @@ describe("createSubmitExtension", () => {
   it("Enter is suppressed inside a code block", () => {
     const onSubmit = vi.fn(() => true);
     const shortcuts = getShortcuts(
-      createSubmitExtension(onSubmit, { submitOnEnter: true }),
+      createSubmitExtension(onSubmit, { submitOnEnterRef: { current: true } }),
       {
         view: { composing: false } as unknown as Editor["view"],
         isActive: (name: string) => name === "codeBlock",

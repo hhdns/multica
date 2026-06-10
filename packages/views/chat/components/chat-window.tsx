@@ -15,6 +15,7 @@ import {
 import { toast } from "sonner";
 import { useWorkspaceId } from "@multica/core/hooks";
 import { useAuthStore } from "@multica/core/auth";
+import { useConfigStore } from "@multica/core/config";
 import { agentListOptions, memberListOptions } from "@multica/core/workspace/queries";
 import { canAssignAgent } from "@multica/views/issues/components";
 import { api } from "@multica/core/api";
@@ -160,6 +161,7 @@ function replaceOptimisticChatMessageId(
 
 export function ChatWindow() {
   const { t } = useT("chat");
+  const enterToSend = useConfigStore((s) => s.chatEnterToSend);
   const wsId = useWorkspaceId();
   const isOpen = useChatStore((s) => s.isOpen);
   const activeSessionId = useChatStore((s) => s.activeSessionId);
@@ -842,6 +844,7 @@ export function ChatWindow() {
         disabled={isSessionArchived}
         noAgent={noAgent}
         agentName={chatInputAgentName}
+        submitOnEnter={enterToSend}
         leftAdornment={
           currentSession?.is_group ? (
             <GroupSessionIndicator

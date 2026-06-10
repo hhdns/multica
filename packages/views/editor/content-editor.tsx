@@ -214,6 +214,7 @@ const ContentEditor = forwardRef<ContentEditorRef, ContentEditorProps>(
     const onUpdateRef = useRef(onUpdate);
     const onSubmitRef = useRef(onSubmit);
     const onBlurRef = useRef(onBlur);
+    const submitOnEnterRef = useRef(submitOnEnter);
     const onUploadFileRef = useRef<
       ((file: File) => Promise<UploadResult | null>) | undefined
     >(undefined);
@@ -294,6 +295,7 @@ const ContentEditor = forwardRef<ContentEditorRef, ContentEditorProps>(
     onUploadFileRef.current = wrappedOnUploadFile;
     mentionContextItemsRef.current = mentionContextItems ?? [];
     flushPendingOnUnmountRef.current = flushPendingOnUnmount;
+    submitOnEnterRef.current = submitOnEnter;
 
     const queryClient = useQueryClient();
 
@@ -339,7 +341,7 @@ const ContentEditor = forwardRef<ContentEditorRef, ContentEditorProps>(
         queryClient,
         onSubmitRef,
         onUploadFileRef,
-        submitOnEnter,
+        submitOnEnterRef,
         disableMentions,
         mentionMode,
         getMentionContextItems: () => mentionContextItemsRef.current,

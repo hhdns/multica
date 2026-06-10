@@ -58,6 +58,10 @@ type AppConfig struct {
 	// EmbeddingLastRebuiltAt is the RFC3339 timestamp of the most recent successful
 	// embedding rebuild. Omitted when no rebuild has been recorded.
 	EmbeddingLastRebuiltAt string `json:"embedding_last_rebuilt_at,omitempty"`
+	// ChatEnterToSend controls whether bare Enter submits a chat message
+	// (Slack/iMessage style) instead of inserting a newline. Defaults to false.
+	// Set CHAT_ENTER_TO_SEND=true to enable instance-wide.
+	ChatEnterToSend bool `json:"chat_enter_to_send,omitempty"`
 }
 
 // GetConfig is mounted on the public (unauthenticated) route group because
@@ -69,6 +73,7 @@ func (h *Handler) GetConfig(w http.ResponseWriter, r *http.Request) {
 		AllowSignup:               os.Getenv("ALLOW_SIGNUP") != "false",
 		GoogleClientID:            os.Getenv("GOOGLE_CLIENT_ID"),
 		WorkspaceCreationDisabled: os.Getenv("DISABLE_WORKSPACE_CREATION") == "true",
+		ChatEnterToSend:           os.Getenv("CHAT_ENTER_TO_SEND") == "true",
 	}
 	if h.Storage != nil {
 		config.CdnDomain = h.Storage.CdnDomain()

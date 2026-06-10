@@ -81,6 +81,14 @@ interface ChatInputProps {
   leftAdornment?: ReactNode;
   /** Chat @ suggestions: current/recent issue/project entries. */
   contextItems?: MentionItem[];
+  /**
+   * When true, bare Enter submits the message (Slack/iMessage style).
+   * Mod+Enter always submits regardless. Use Shift+Enter to insert a
+   * newline when this mode is active. Defaults to false so Enter
+   * continues bullet lists and paragraph breaks as normal.
+   * Controlled via the CHAT_ENTER_TO_SEND server env var (read from /api/config).
+   */
+  submitOnEnter?: boolean;
 }
 
 export function ChatInput({
@@ -95,6 +103,7 @@ export function ChatInput({
   agentName,
   leftAdornment,
   contextItems,
+  submitOnEnter = false,
 }: ChatInputProps) {
   const { t } = useT("chat");
   const editorRef = useRef<ContentEditorRef>(null);
@@ -390,11 +399,7 @@ export function ChatInput({
             // Chat is short-form — the floating formatting toolbar is
             // more distraction than feature here.
             showBubbleMenu={false}
-            // Chat intentionally leaves submitOnEnter at its default false:
-            // Mod+Enter submits, while bare Enter falls through to Tiptap's
-            // default behavior for lists, quotes, and paragraph breaks.
-            // Without this, Enter-as-send would steal the only key that
-            // continues a bullet list, leaving users stuck after one item.
+            submitOnEnter={submitOnEnter}
           />
         </div>
         {leftAdornment && (

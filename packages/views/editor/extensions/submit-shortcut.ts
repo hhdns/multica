@@ -5,21 +5,23 @@ import { Extension } from "@tiptap/core";
  * when there's no submit handler wired up. That lets us fall through to the
  * default Enter behaviour — inserting a newline — when appropriate.
  *
- * `submitOnEnter` — when true, bare Enter also submits (chat-style). When
- * false, only Mod-Enter submits and bare Enter keeps its default (newline).
+ * `submitOnEnterRef` — checked at keypress time rather than captured at mount.
+ * The extension is created once when the editor initialises; a plain boolean
+ * would be frozen at that moment. Using a ref lets the value change after mount
+ * (e.g. the /api/config response arrives after the first render) without
+ * requiring an editor remount.
  */
 export function createSubmitExtension(
   onSubmit: () => boolean,
-  { submitOnEnter }: { submitOnEnter: boolean },
+  { submitOnEnterRef }: { submitOnEnterRef: { current: boolean } },
 ) {
   return Extension.create({
     name: "submitShortcut",
     addKeyboardShortcuts() {
-      const shortcuts: Record<string, () => boolean> = {
+      return {
         "Mod-Enter": () => onSubmit(),
-      };
-      if (submitOnEnter) {
-        shortcuts.Enter = () => {
+        Enter: () => {
+          if (!submitOnEnterRef.current) return false;
           const editor = this.editor;
           // IME guard — never submit while composing a multi-key input
           // (Chinese pinyin, Japanese kana, etc). `view.composing` is set
@@ -28,9 +30,8 @@ export function createSubmitExtension(
           // Let Enter insert a newline inside a code block.
           if (editor.isActive("codeBlock")) return false;
           return onSubmit();
-        };
-      }
-      return shortcuts;
+        },
+      };
     },
   });
 }
