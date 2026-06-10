@@ -192,11 +192,19 @@ LIMIT 1;
 -- agent, newest-first. Used for Layer-1 temporal injection at claim time:
 -- raw verbatim messages give the agent working memory of recent exchanges
 -- without requiring an LLM call.
+-- Covers both private sessions (cs.agent_id) and group sessions where the
+-- agent joined as a participant (chat_session_participant).
 SELECT cm.id, cm.chat_session_id, cm.role, cm.content, cm.created_at
 FROM chat_message cm
 JOIN chat_session cs ON cs.id = cm.chat_session_id
-WHERE cs.agent_id = @agent_id
-  AND cs.workspace_id = @workspace_id
+WHERE cs.workspace_id = @workspace_id
+  AND (
+      cs.agent_id = @agent_id
+      OR EXISTS (
+          SELECT 1 FROM chat_session_participant csp
+          WHERE csp.chat_session_id = cs.id AND csp.agent_id = @agent_id
+      )
+  )
   AND cm.role IN ('user', 'assistant')
   AND cm.failure_reason IS NULL
   AND cm.content != ''

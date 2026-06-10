@@ -550,8 +550,14 @@ const getRecentAgentChatMessages = `-- name: GetRecentAgentChatMessages :many
 SELECT cm.id, cm.chat_session_id, cm.role, cm.content, cm.created_at
 FROM chat_message cm
 JOIN chat_session cs ON cs.id = cm.chat_session_id
-WHERE cs.agent_id = $1
-  AND cs.workspace_id = $2
+WHERE cs.workspace_id = $1
+  AND (
+      cs.agent_id = $2
+      OR EXISTS (
+          SELECT 1 FROM chat_session_participant csp
+          WHERE csp.chat_session_id = cs.id AND csp.agent_id = $2
+      )
+  )
   AND cm.role IN ('user', 'assistant')
   AND cm.failure_reason IS NULL
   AND cm.content != ''
@@ -560,8 +566,8 @@ LIMIT $3
 `
 
 type GetRecentAgentChatMessagesParams struct {
-	AgentID     pgtype.UUID `json:"agent_id"`
 	WorkspaceID pgtype.UUID `json:"workspace_id"`
+	AgentID     pgtype.UUID `json:"agent_id"`
 	MsgLimit    int32       `json:"msg_limit"`
 }
 
@@ -577,8 +583,10 @@ type GetRecentAgentChatMessagesRow struct {
 // agent, newest-first. Used for Layer-1 temporal injection at claim time:
 // raw verbatim messages give the agent working memory of recent exchanges
 // without requiring an LLM call.
+// Covers both private sessions (cs.agent_id) and group sessions where the
+// agent joined as a participant (chat_session_participant).
 func (q *Queries) GetRecentAgentChatMessages(ctx context.Context, arg GetRecentAgentChatMessagesParams) ([]GetRecentAgentChatMessagesRow, error) {
-	rows, err := q.db.Query(ctx, getRecentAgentChatMessages, arg.AgentID, arg.WorkspaceID, arg.MsgLimit)
+	rows, err := q.db.Query(ctx, getRecentAgentChatMessages, arg.WorkspaceID, arg.AgentID, arg.MsgLimit)
 	if err != nil {
 		return nil, err
 	}
