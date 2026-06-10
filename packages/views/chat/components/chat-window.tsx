@@ -1637,13 +1637,19 @@ function useFormatTimeAgo(): (dateStr: string) => string {
     const diffMs = now.getTime() - date.getTime();
     const diffMins = Math.floor(diffMs / 60000);
     const diffHours = Math.floor(diffMs / 3600000);
-    const diffDays = Math.floor(diffMs / 86400000);
+    const isToday = date.toDateString() === now.toDateString();
 
-    if (diffMins < 1) return t(($) => $.session_history.time.just_now);
-    if (diffMins < 60) return t(($) => $.session_history.time.minutes, { count: diffMins });
-    if (diffHours < 24) return t(($) => $.session_history.time.hours, { count: diffHours });
-    if (diffDays < 7) return t(($) => $.session_history.time.days, { count: diffDays });
-    return date.toLocaleDateString();
+    if (isToday) {
+      if (diffMins < 1) return t(($) => $.session_history.time.just_now);
+      if (diffMins < 60) return t(($) => $.session_history.time.minutes, { count: diffMins });
+      return t(($) => $.session_history.time.hours, { count: diffHours });
+    }
+    // Different calendar day: show the actual date so users can tell which
+    // day the conversation happened. Include the year when it differs.
+    const sameYear = date.getFullYear() === now.getFullYear();
+    return date.toLocaleDateString(undefined, sameYear
+      ? { month: "short", day: "numeric" }
+      : { month: "short", day: "numeric", year: "numeric" });
   };
 }
 
