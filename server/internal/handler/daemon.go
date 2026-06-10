@@ -2010,11 +2010,20 @@ func groupChatNewContext(msgs []db.ChatMessage, agentID pgtype.UUID) []db.ChatMe
 	if lastOwnIdx >= 0 {
 		startIdx = lastOwnIdx + 1
 	}
-	window := msgs[startIdx:]
-	if len(window) > groupChatHistoryWindow {
-		window = window[len(window)-groupChatHistoryWindow:]
+	// Filter [SILENT] before applying the cap so silent turns don't eat
+	// into the groupChatHistoryWindow quota at the expense of real content.
+	raw := msgs[startIdx:]
+	filtered := make([]db.ChatMessage, 0, len(raw))
+	for _, m := range raw {
+		if m.Role == "assistant" && strings.TrimSpace(m.Content) == "[SILENT]" {
+			continue
+		}
+		filtered = append(filtered, m)
 	}
-	return window
+	if len(filtered) > groupChatHistoryWindow {
+		filtered = filtered[len(filtered)-groupChatHistoryWindow:]
+	}
+	return filtered
 }
 
 // ListPendingTasksByRuntime returns queued/dispatched tasks for a runtime.
