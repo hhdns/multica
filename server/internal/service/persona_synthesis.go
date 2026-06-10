@@ -397,18 +397,31 @@ type openAIResponse struct {
 	} `json:"error"`
 }
 
+// needsThinkingSuppression reports whether the model is a local thinking model
+// (Qwen3, DeepSeek-R1) that requires explicit suppression fields. Production
+// APIs like Gemini and OpenAI reject these unknown fields with a 400 error.
+func needsThinkingSuppression(model string) bool {
+	lower := strings.ToLower(model)
+	return strings.Contains(lower, "qwen") ||
+		strings.Contains(lower, "deepseek") ||
+		strings.Contains(lower, "r1")
+}
+
 func callOpenAICompat(ctx context.Context, cfg synthesisConfig, userPrompt string, maxTok int) (llmCallResult, error) {
-	noThink := false
-	body, err := json.Marshal(openAIRequest{
+	apiReq := openAIRequest{
 		Model:     cfg.model,
 		MaxTokens: maxTok,
 		Messages: []openAIMessage{
 			{Role: "system", Content: "You are a concise technical writer. Output only the requested text."},
 			{Role: "user", Content: userPrompt},
 		},
-		ChatTemplateKwargs: map[string]any{"enable_thinking": false}, // vLLM
-		Think:              &noThink,                                  // Ollama 0.7+
-	})
+	}
+	if needsThinkingSuppression(cfg.model) {
+		noThink := false
+		apiReq.Think = &noThink                                              // Ollama 0.7+
+		apiReq.ChatTemplateKwargs = map[string]any{"enable_thinking": false} // vLLM
+	}
+	body, err := json.Marshal(apiReq)
 	if err != nil {
 		return llmCallResult{}, err
 	}
