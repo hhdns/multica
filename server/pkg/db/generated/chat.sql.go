@@ -500,7 +500,7 @@ func (q *Queries) GetMostRecentUserChatMessage(ctx context.Context, chatSessionI
 }
 
 const getPendingChatTask = `-- name: GetPendingChatTask :one
-SELECT id, status, created_at FROM agent_task_queue
+SELECT id, agent_id, status, created_at FROM agent_task_queue
 WHERE chat_session_id = $1 AND status IN ('queued', 'dispatched', 'running', 'waiting_local_directory')
 ORDER BY created_at DESC
 LIMIT 1
@@ -508,6 +508,7 @@ LIMIT 1
 
 type GetPendingChatTaskRow struct {
 	ID        pgtype.UUID        `json:"id"`
+	AgentID   pgtype.UUID        `json:"agent_id"`
 	Status    string             `json:"status"`
 	CreatedAt pgtype.Timestamptz `json:"created_at"`
 }
@@ -520,7 +521,12 @@ type GetPendingChatTaskRow struct {
 func (q *Queries) GetPendingChatTask(ctx context.Context, chatSessionID pgtype.UUID) (GetPendingChatTaskRow, error) {
 	row := q.db.QueryRow(ctx, getPendingChatTask, chatSessionID)
 	var i GetPendingChatTaskRow
-	err := row.Scan(&i.ID, &i.Status, &i.CreatedAt)
+	err := row.Scan(
+		&i.ID,
+		&i.AgentID,
+		&i.Status,
+		&i.CreatedAt,
+	)
 	return i, err
 }
 
@@ -861,6 +867,46 @@ func (q *Queries) ListPendingChatTasksByCreator(ctx context.Context, arg ListPen
 	for rows.Next() {
 		var i ListPendingChatTasksByCreatorRow
 		if err := rows.Scan(&i.TaskID, &i.Status, &i.ChatSessionID); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const listPendingChatTasksForSession = `-- name: ListPendingChatTasksForSession :many
+SELECT id, agent_id, status, created_at FROM agent_task_queue
+WHERE chat_session_id = $1 AND status IN ('queued', 'dispatched', 'running', 'waiting_local_directory')
+ORDER BY created_at ASC
+`
+
+type ListPendingChatTasksForSessionRow struct {
+	ID        pgtype.UUID        `json:"id"`
+	AgentID   pgtype.UUID        `json:"agent_id"`
+	Status    string             `json:"status"`
+	CreatedAt pgtype.Timestamptz `json:"created_at"`
+}
+
+// Returns all in-flight tasks for a chat session. Used by group sessions
+// where multiple agents may be thinking simultaneously.
+func (q *Queries) ListPendingChatTasksForSession(ctx context.Context, chatSessionID pgtype.UUID) ([]ListPendingChatTasksForSessionRow, error) {
+	rows, err := q.db.Query(ctx, listPendingChatTasksForSession, chatSessionID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []ListPendingChatTasksForSessionRow{}
+	for rows.Next() {
+		var i ListPendingChatTasksForSessionRow
+		if err := rows.Scan(
+			&i.ID,
+			&i.AgentID,
+			&i.Status,
+			&i.CreatedAt,
+		); err != nil {
 			return nil, err
 		}
 		items = append(items, i)

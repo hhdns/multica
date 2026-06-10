@@ -18,13 +18,14 @@ import {
   TooltipContent,
 } from "@multica/ui/components/ui/tooltip";
 import { ChevronRight, ChevronDown, Brain, AlertCircle, AlertTriangle, Copy } from "lucide-react";
+import { ActorAvatar } from "../../common/actor-avatar";
 import { useScrollFade } from "@multica/ui/hooks/use-scroll-fade";
 import { isTaskMessageTaskId, taskMessagesOptions } from "@multica/core/chat/queries";
 import { Markdown } from "@multica/views/common/markdown";
 import { copyText } from "@multica/ui/lib/clipboard";
 import { AttachmentList } from "../../issues/components/comment-card";
 import type { AgentAvailability } from "@multica/core/agents";
-import type { ChatMessage, ChatPendingTask, TaskFailureReason } from "@multica/core/types";
+import type { ChatMessage, ChatPendingTask, ChatPendingTasksMap, TaskFailureReason } from "@multica/core/types";
 import type { ChatTimelineItem } from "@multica/core/chat";
 import { failureReasonLabel } from "../../agents/components/tabs/task-failure";
 import { buildTimeline } from "../../common/task-transcript";
@@ -38,22 +39,25 @@ import { useT } from "../../i18n";
 interface ChatMessageListProps {
   messages: ChatMessage[];
   /**
-   * Server-authoritative pending-task snapshot. `null` / undefined means
-   * no in-flight task — list renders without StatusPill.
+   * All in-flight tasks for this session keyed by task_id.
+   * Empty object = nothing running. Group sessions may have multiple entries.
    */
-  pendingTask: ChatPendingTask | null | undefined;
+  pendingTasksMap: ChatPendingTasksMap;
   /** Resolved presence; pass `undefined` while loading to keep the pill copy neutral. */
   availability: AgentAvailability | undefined;
   firstItemIndex?: number;
   hasOlderMessages?: boolean;
   isFetchingOlderMessages?: boolean;
   onLoadOlderMessages?: () => void;
+  /** Agent name + id lookup for group chat attribution (id → name). */
+  agentNameById?: Map<string, string>;
 }
 
 export function ChatMessageList({
   messages,
-  pendingTask,
+  pendingTasksMap,
   availability,
+  agentNameById,
   firstItemIndex = 0,
   hasOlderMessages = false,
   isFetchingOlderMessages = false,
@@ -69,29 +73,9 @@ export function ChatMessageList({
   const fadeStyle = useScrollFade(scrollRef);
   const { t } = useT("chat");
 
-  const pendingTaskId = pendingTask?.task_id ?? null;
-
-  // Once the assistant message for this pending task has landed in the
-  // messages list, AssistantMessage owns its rendering — suppress the live
-  // timeline (and pill) to avoid rendering the same content in two places
-  // during the invalidate → refetch window.
-  const pendingAlreadyPersisted = !!pendingTaskId && messages.some(
-    (m) => m.role === "assistant" && m.task_id === pendingTaskId,
-  );
-
-  // Live timeline for the in-flight task. useRealtimeSync keeps this cache
-  // current via setQueryData on task:message events.
-  const showLiveTimeline = !!pendingTaskId && !pendingAlreadyPersisted;
-  const canFetchLiveTimeline = isTaskMessageTaskId(pendingTaskId) && !pendingAlreadyPersisted;
-  const { data: liveTaskMessages } = useQuery({
-    ...taskMessagesOptions(pendingTaskId ?? ""),
-    enabled: canFetchLiveTimeline,
-  });
-  const liveTimeline: ChatTimelineItem[] = buildTimeline(liveTaskMessages ?? []);
-  const hasLive = showLiveTimeline && liveTimeline.length > 0;
-  const showStatusPill = !!pendingTaskId && !pendingAlreadyPersisted && !!pendingTask;
-
-  const totalCount = messages.length + (hasLive || showStatusPill ? 1 : 0);
+  const activeTasks = Object.values(pendingTasksMap);
+  const hasPendingRows = activeTasks.length > 0;
+  const totalCount = messages.length + (hasPendingRows ? 1 : 0);
   const firstIndex = totalCount > 0 ? firstItemIndex : 0;
 
   return (
@@ -130,18 +114,15 @@ export function ChatMessageList({
           ),
           Footer: () => (
             <div className="mx-auto w-full max-w-4xl px-5 pb-4 space-y-4">
-              {hasLive && (
-                <div className="w-full space-y-1.5">
-                  <TimelineView items={liveTimeline} isStreaming />
-                </div>
-              )}
-              {showStatusPill && pendingTask && (
-                <TaskStatusPill
-                  pendingTask={pendingTask}
-                  taskMessages={liveTaskMessages ?? []}
+              {activeTasks.map((task) => (
+                <SinglePendingTaskRow
+                  key={task.task_id ?? "unknown"}
+                  task={task}
+                  messages={messages}
                   availability={availability}
+                  agentNameById={agentNameById}
                 />
-              )}
+              ))}
             </div>
           ),
         }}
@@ -149,12 +130,57 @@ export function ChatMessageList({
           <div className="mx-auto w-full max-w-4xl px-5 py-2">
             <MessageBubble
               message={msg}
-              isPending={!!pendingTaskId && msg.task_id === pendingTaskId}
+              isPending={msg.task_id !== null && msg.task_id !== undefined && msg.task_id in pendingTasksMap}
+              agentNameById={agentNameById}
             />
           </div>
         )}
       />
       )}
+    </div>
+  );
+}
+
+// Renders one pending task's live timeline + status pill.
+// Lives as a separate component so each instance can call useQuery for its
+// own task messages without violating the rules-of-hooks (no dynamic hooks).
+function SinglePendingTaskRow({
+  task,
+  messages,
+  availability,
+  agentNameById,
+}: {
+  task: ChatPendingTask;
+  messages: ChatMessage[];
+  availability: AgentAvailability | undefined;
+  agentNameById?: Map<string, string>;
+}) {
+  const taskId = task.task_id ?? null;
+  const alreadyPersisted = !!taskId && messages.some(
+    (m) => m.role === "assistant" && m.task_id === taskId,
+  );
+  const canFetch = isTaskMessageTaskId(taskId) && !alreadyPersisted;
+  const { data: taskMessages } = useQuery({
+    ...taskMessagesOptions(taskId ?? ""),
+    enabled: canFetch,
+  });
+  const liveTimeline: ChatTimelineItem[] = buildTimeline(taskMessages ?? []);
+  const hasLive = !alreadyPersisted && liveTimeline.length > 0;
+  const groupAgent = agentNameById && task.agent_id
+    ? { id: task.agent_id, name: agentNameById.get(task.agent_id) ?? "" }
+    : null;
+
+  if (alreadyPersisted) return null;
+
+  return (
+    <div className="w-full space-y-1.5">
+      {hasLive && <TimelineView items={liveTimeline} isStreaming />}
+      <TaskStatusPill
+        pendingTask={task}
+        taskMessages={taskMessages ?? []}
+        availability={availability}
+        groupAgent={groupAgent}
+      />
     </div>
   );
 }
@@ -188,10 +214,15 @@ export function ChatMessageSkeleton() {
 
 // ─── Message bubbles ─────────────────────────────────────────────────────
 
-function MessageBubble({ message, isPending }: { message: ChatMessage; isPending: boolean }) {
+function formatTimestamp(isoString: string): string {
+  const d = new Date(isoString);
+  return `${d.getHours().toString().padStart(2, "0")}:${d.getMinutes().toString().padStart(2, "0")}`;
+}
+
+function MessageBubble({ message, isPending, agentNameById }: { message: ChatMessage; isPending: boolean; agentNameById?: Map<string, string>; }) {
   if (message.role === "user") {
     return (
-      <div className="flex justify-end">
+      <div className="flex flex-col items-end gap-0.5">
         <div className="rounded-2xl bg-muted px-3.5 py-2 text-sm max-w-[80%] break-words">
           {/* User messages are authored as markdown in ContentEditor, so
            * render them through the same pipeline as assistant replies.
@@ -206,19 +237,33 @@ function MessageBubble({ message, isPending }: { message: ChatMessage; isPending
             className="mt-1.5"
           />
         </div>
+        <span className="text-[10px] text-muted-foreground/50 select-none pr-0.5">
+          {formatTimestamp(message.created_at)}
+        </span>
       </div>
     );
   }
 
-  return <AssistantMessage message={message} isPending={isPending} />;
+  return (
+    <AssistantMessage
+      message={message}
+      isPending={isPending}
+      agentName={message.agent_id ? agentNameById?.get(message.agent_id) : undefined}
+      agentId={message.agent_id ?? undefined}
+    />
+  );
 }
 
 function AssistantMessage({
   message,
   isPending,
+  agentName,
+  agentId,
 }: {
   message: ChatMessage;
   isPending: boolean;
+  agentName?: string;
+  agentId?: string;
 }) {
   const taskId = message.task_id;
   const canFetchTaskMessages = isTaskMessageTaskId(taskId);
@@ -244,12 +289,21 @@ function AssistantMessage({
         rawError={message.content}
         timeline={timeline}
         elapsedMs={message.elapsed_ms}
+        createdAt={message.created_at}
       />
     );
   }
 
   return (
     <div className="w-full space-y-1.5">
+      {agentName && (
+        <div className="flex items-center gap-1.5">
+          {agentId && (
+            <ActorAvatar actorType="agent" actorId={agentId} size={16} enableHoverCard />
+          )}
+          <span className="text-xs font-medium text-muted-foreground">{agentName}</span>
+        </div>
+      )}
       {timeline.length > 0 ? (
         <TimelineView items={timeline} attachments={message.attachments} />
       ) : (
@@ -285,9 +339,11 @@ function MessageFooter({
   isPending: boolean;
 }) {
   const showCopy = !isPending;
-  if (message.elapsed_ms == null && !showCopy) return null;
   return (
     <div className="flex items-center gap-1.5">
+      <span className="text-[10px] text-muted-foreground/50 select-none">
+        {formatTimestamp(message.created_at)}
+      </span>
       {message.elapsed_ms != null && (
         <ElapsedCaption variant="replied" elapsedMs={message.elapsed_ms} />
       )}
@@ -364,11 +420,13 @@ function FailureBubble({
   rawError,
   timeline,
   elapsedMs,
+  createdAt,
 }: {
   reason: string;
   rawError: string;
   timeline: ChatTimelineItem[];
   elapsedMs?: number | null;
+  createdAt: string;
 }) {
   const { t } = useT("chat");
   const [open, setOpen] = useState(false);
@@ -410,9 +468,12 @@ function FailureBubble({
         </div>
       </div>
       {timeline.length > 0 && <TimelineView items={timeline} />}
-      {elapsedMs != null && (
-        <ElapsedCaption variant="failed" elapsedMs={elapsedMs} />
-      )}
+      <div className="flex items-center gap-1.5">
+        <span className="text-[10px] text-muted-foreground/50 select-none">{formatTimestamp(createdAt)}</span>
+        {elapsedMs != null && (
+          <ElapsedCaption variant="failed" elapsedMs={elapsedMs} />
+        )}
+      </div>
     </div>
   );
 }

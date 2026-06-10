@@ -1,4 +1,5 @@
 import { infiniteQueryOptions, queryOptions } from "@tanstack/react-query";
+import type { ChatPendingTasksMap } from "../types";
 import { api } from "../api";
 
 // NOTE on workspace scoping:
@@ -15,6 +16,7 @@ export const chatKeys = {
   session: (wsId: string, id: string) => [...chatKeys.all(wsId), "session", id] as const,
   messages: (sessionId: string) => ["chat", "messages", sessionId] as const,
   messagesPage: (sessionId: string) => ["chat", "messages-page", sessionId] as const,
+  /** Map of task_id → ChatPendingTask for one session. Replaces the old single-task key. */
   pendingTask: (sessionId: string) => ["chat", "pending-task", sessionId] as const,
   /** Aggregate of in-flight chat tasks for the current user — FAB reads this. */
   pendingTasks: (wsId: string) => [...chatKeys.all(wsId), "pending-tasks"] as const,
@@ -68,14 +70,14 @@ export function chatMessagesPageOptions(sessionId: string, limit = 50) {
 }
 
 /**
- * Pending task for a chat session — the "is something still running?" signal.
- * Refetched via WS invalidation in useRealtimeSync when chat:message / chat:done
- * / task:completed / task:failed arrive.
+ * All pending tasks for a session as a map (task_id → ChatPendingTask).
+ * Empty map = nothing running. Group sessions may have multiple entries.
+ * Refetched via WS invalidation in useRealtimeSync.
  */
 export function pendingChatTaskOptions(sessionId: string) {
-  return queryOptions({
+  return queryOptions<ChatPendingTasksMap>({
     queryKey: chatKeys.pendingTask(sessionId),
-    queryFn: () => api.getPendingChatTask(sessionId),
+    queryFn: () => api.listPendingChatTasksForSession(sessionId),
     enabled: !!sessionId,
     staleTime: Infinity,
   });

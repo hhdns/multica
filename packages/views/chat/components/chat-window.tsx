@@ -3,7 +3,7 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useInfiniteQuery, useQuery, useQueryClient, type InfiniteData } from "@tanstack/react-query";
 import { motion } from "motion/react";
-import { Minus, Maximize2, Minimize2, ChevronDown, Plus, Check, Trash2, Pencil, Loader2, Square } from "lucide-react";
+import { Minus, Maximize2, Minimize2, ChevronDown, Plus, Check, Trash2, Pencil, Loader2, Square, Users } from "lucide-react";
 import { Button } from "@multica/ui/components/ui/button";
 import { cn } from "@multica/ui/lib/utils";
 import { Tooltip, TooltipTrigger, TooltipContent } from "@multica/ui/components/ui/tooltip";
@@ -51,7 +51,7 @@ import { ChatResizeHandles } from "./chat-resize-handles";
 import { useChatContextItems } from "./use-chat-context-items";
 import { useChatResize } from "./use-chat-resize";
 import { createLogger } from "@multica/core/logger";
-import type { Agent, Attachment, ChatMessage, ChatMessagesPage, ChatPendingTask, ChatSession, PendingChatTasksResponse } from "@multica/core/types";
+import type { Agent, Attachment, ChatMessage, ChatMessagesPage, ChatPendingTasksMap, ChatSession, PendingChatTasksResponse } from "@multica/core/types";
 import { useT } from "../../i18n";
 
 const uiLogger = createLogger("chat.ui");
@@ -168,6 +168,9 @@ export function ChatWindow() {
   const setActiveSession = useChatStore((s) => s.setActiveSession);
   const setSelectedAgentId = useChatStore((s) => s.setSelectedAgentId);
   const user = useAuthStore((s) => s.user);
+  // Group chat: set before sending first message in a group session; cleared on session create.
+  const [groupAgentIds, setGroupAgentIds] = useState<string[]>([]);
+  const [groupRoutingMode, setGroupRoutingMode] = useState<"mention" | "relay">("relay");
   const { data: agents = [] } = useQuery(agentListOptions(wsId));
   const { data: members = [] } = useQuery(memberListOptions(wsId));
   // Single sessions cache — eliminates the separate active/all queries
@@ -202,11 +205,12 @@ export function ChatWindow() {
   // (chat:message / chat:done / task:*) keep it invalidated in real time.
   //
   // This is the SOLE source for pendingTaskId — no mirror in the store.
-  const { data: pendingTask } = useQuery(
+  const { data: pendingTasksMap } = useQuery(
     pendingChatTaskOptions(activeSessionId ?? ""),
   );
-  const pendingTaskId = pendingTask?.task_id ?? null;
-  const stopRequestedBeforeTaskRef = useRef(false);
+  // Derive a flat list and a single representative task_id (for single-agent compat).
+  const pendingTasksList = Object.values(pendingTasksMap ?? {});
+  const pendingTaskId = pendingTasksList[0]?.task_id ?? null;
   const [restoreDraftRequest, setRestoreDraftRequest] = useState<{
     id: string;
     content: string;
@@ -331,14 +335,17 @@ export function ChatWindow() {
   const ensureSession = useCallback(
     async (titleSeed: string): Promise<string | null> => {
       if (activeSessionId) return activeSessionId;
-      if (!activeAgent) return null;
+      const isGroup = groupAgentIds.length >= 2;
+      if (!isGroup && !activeAgent) return null;
       if (sessionPromiseRef.current) return sessionPromiseRef.current;
 
       const promise = (async () => {
         try {
+          const primaryAgentId = isGroup ? (groupAgentIds[0] ?? "") : activeAgent!.id;
           const session = await createSession.mutateAsync({
-            agent_id: activeAgent.id,
+            agent_id: primaryAgentId,
             title: titleSeed.slice(0, 50),
+            ...(isGroup && { agent_ids: groupAgentIds, routing_mode: groupRoutingMode }),
           });
           return session.id;
         } finally {
@@ -348,19 +355,20 @@ export function ChatWindow() {
       sessionPromiseRef.current = promise;
       return promise;
     },
-    [activeSessionId, activeAgent, createSession],
+    [activeSessionId, activeAgent, groupAgentIds, groupRoutingMode, createSession],
   );
 
   const handleUploadFile = useCallback(
     async (file: File) => {
-      if (!activeAgent) return null;
+      const isGroup = groupAgentIds.length >= 2;
+      if (!activeAgent && !isGroup) return null;
       // Uploads are workspace-scoped drafts. Sending the message is the point
       // where we create a chat session (if needed) and bind attachment_ids to
       // the persisted chat_message row. This keeps a paste/drop from creating
       // an empty chat session the user never sends.
       return uploadWithToast(file);
     },
-    [activeAgent, uploadWithToast],
+    [activeAgent, groupAgentIds, uploadWithToast],
   );
 
   const cancelChatTask = useCallback(
@@ -419,7 +427,8 @@ export function ChatWindow() {
       commitInput?: (options?: { extraDraftKeys?: string[]; clearEditor?: boolean }) => void,
       draftAttachments: Attachment[] = [],
     ): Promise<boolean> => {
-      if (!activeAgent) {
+      const isGroup = groupAgentIds.length >= 2;
+      if (!activeAgent && !isGroup) {
         apiLogger.warn("sendChatMessage skipped: no active agent");
         return false;
       }
@@ -431,7 +440,7 @@ export function ChatWindow() {
       apiLogger.info("sendChatMessage.start", {
         sessionId: activeSessionId,
         isNewSession,
-        agentId: activeAgent.id,
+        agentId: activeAgent?.id,
         contentLength: finalContent.length,
         attachmentCount: attachmentIds?.length ?? 0,
       });
@@ -475,24 +484,18 @@ export function ChatWindow() {
         chatKeys.messages(sessionId),
         (old) => (old ? [...old, optimistic] : [optimistic]),
       );
-      // Seed the pending-task with a temporary id so the StatusPill mounts
-      // and starts ticking the instant the user clicks send. Real task_id
-      // and server-authoritative created_at land below; until then the pill
-      // is anchored to the local clock (drift is the request RTT, ~50–200ms,
-      // which doesn't change the rendered "Ns" value).
-      qc.setQueryData<ChatPendingTask>(chatKeys.pendingTask(sessionId), {
-        task_id: `optimistic-${optimistic.id}`,
-        status: "queued",
-        created_at: sentAt,
-      });
+      // Seed an optimistic entry so the StatusPill mounts immediately.
+      // The real task_id(s) arrive from the API response and WS task:queued events.
+      const optimisticTaskId = `optimistic-${optimistic.id}`;
+      qc.setQueryData<ChatPendingTasksMap>(chatKeys.pendingTask(sessionId), (old) => ({
+        ...(old ?? {}),
+        [optimisticTaskId]: { task_id: optimisticTaskId, status: "queued", created_at: sentAt },
+      }));
       // Cache primed → safe to publish the new active session. But only steal
       // focus if the user is STILL on the compose target they sent from — if
       // they navigated away mid-send, this is fire-and-forget: the reply
       // surfaces via the unread dot on the sent session, we don't yank the
-      // view back. Compare the live store against the closure-captured target.
-      // For a brand-new chat (activeSessionId === null) the target is keyed by
-      // the selected agent, so switching agents to start a different new chat
-      // must also count as "navigated away" even though both sides are null.
+      // view back.
       const live = useChatStore.getState();
       const stillOnSourceSession =
         live.activeSessionId === activeSessionId &&
@@ -508,7 +511,6 @@ export function ChatWindow() {
         result = await api.sendChatMessage(sessionId, finalContent, attachmentIds);
       } catch (err) {
         apiLogger.error("sendChatMessage.error.rollback", { sessionId, optimisticId: optimistic.id, err });
-        stopRequestedBeforeTaskRef.current = false;
         removeChatMessageFromCaches(qc, sessionId, optimistic.id);
         qc.setQueryData(chatKeys.pendingTask(sessionId), {});
         setRestoreDraftRequest({
@@ -529,22 +531,16 @@ export function ChatWindow() {
         taskId: result.task_id,
       });
       replaceOptimisticChatMessageId(qc, sessionId, optimistic.id, result.message_id, result.task_id);
-      // Replace the temporary task_id with the server's real one (so the WS
-      // task: handlers can match against it) and snap the anchor to the
-      // server's created_at — keeping the elapsed-seconds reading stable.
-      qc.setQueryData<ChatPendingTask>(chatKeys.pendingTask(sessionId), {
-        task_id: result.task_id,
-        status: "queued",
-        created_at: result.created_at,
+      // Replace the optimistic entry with the real task_id from the server.
+      // For group sessions the WS task:queued events will add the other entries.
+      qc.setQueryData<ChatPendingTasksMap>(chatKeys.pendingTask(sessionId), (old) => {
+        const next = { ...(old ?? {}) };
+        delete next[optimisticTaskId];
+        if (result.task_id) {
+          next[result.task_id] = { task_id: result.task_id, status: "queued", created_at: result.created_at };
+        }
+        return next;
       });
-      if (stopRequestedBeforeTaskRef.current) {
-        stopRequestedBeforeTaskRef.current = false;
-        await cancelChatTask(result.task_id, sessionId, {
-          restoreDraftToInput: true,
-          source: "deferred-send",
-        });
-        return false;
-      }
       // The server reports which attachment ids it actually bound. Diff
       // against what we requested so a silent bind failure surfaces to the
       // user — no extra fetch. Skip the check on servers that predate the
@@ -569,6 +565,7 @@ export function ChatWindow() {
       activeSessionId,
       selectedAgentId,
       activeAgent,
+      groupAgentIds,
       ensureSession,
       cancelChatTask,
       qc,
@@ -582,19 +579,26 @@ export function ChatWindow() {
       apiLogger.debug("cancelTask skipped: no pending task");
       return;
     }
-    if (!isTaskMessageTaskId(pendingTaskId)) {
-      stopRequestedBeforeTaskRef.current = true;
-      apiLogger.info("cancelTask.deferred until server task id", {
-        taskId: pendingTaskId,
-        sessionId: activeSessionId,
-      });
-      return;
-    }
-    void cancelChatTask(pendingTaskId, activeSessionId, {
-      restoreDraftToInput: true,
-      source: "active-input",
-    });
-  }, [pendingTaskId, activeSessionId, cancelChatTask]);
+    // Optimistic clear — pill disappears + input unlocks the moment the
+    // user clicks Stop, instead of after the HTTP roundtrip. WS
+    // task:cancelled will confirm later (no-op if cache is already empty);
+    // if the cancel POST fails because the task already finished, the
+    // assistant message arrives via task:completed → chat:done and renders
+    // normally. Either way the UI is in sync with reality without latency.
+    apiLogger.info("cancelTask.start", { taskId: pendingTaskId, sessionId: activeSessionId });
+    // Optimistically clear the entire map — all tasks in the session are stopped.
+    qc.setQueryData<ChatPendingTasksMap>(chatKeys.pendingTask(activeSessionId), {});
+    qc.invalidateQueries({ queryKey: chatKeys.messages(activeSessionId) });
+    qc.invalidateQueries({ queryKey: chatKeys.messagesPage(activeSessionId) });
+    api.cancelTaskById(pendingTaskId).then(
+      () => apiLogger.info("cancelTask.success", { taskId: pendingTaskId }),
+      (err) =>
+        apiLogger.warn("cancelTask.error (task may have already finished)", {
+          taskId: pendingTaskId,
+          err,
+        }),
+    );
+  }, [pendingTaskId, activeSessionId, qc]);
 
   const handleSelectAgent = useCallback(
     (agent: Agent) => {
@@ -615,19 +619,9 @@ export function ChatWindow() {
     [activeAgent, selectedAgentId, activeSessionId, setSelectedAgentId, setActiveSession],
   );
 
-  const handleNewChat = useCallback(() => {
-    uiLogger.info("newChat", {
-      previousSessionId: activeSessionId,
-      previousPendingTask: pendingTaskId,
-    });
-    setActiveSession(null);
-  }, [activeSessionId, pendingTaskId, setActiveSession]);
-
   const handleSelectSession = useCallback(
     (session: ChatSession) => {
-      // Sessions are bound 1:1 to an agent — picking a session from a
-      // different agent implicitly switches the agent too.
-      if (activeAgent && session.agent_id !== activeAgent.id) {
+      if (!session.is_group && activeAgent && session.agent_id !== activeAgent.id) {
         uiLogger.info("selectSession (cross-agent)", {
           from: activeAgent.id,
           toAgent: session.agent_id,
@@ -635,6 +629,7 @@ export function ChatWindow() {
         });
         setSelectedAgentId(session.agent_id);
       }
+      setGroupAgentIds([]);
       setActiveSession(session.id);
     },
     [activeAgent, setSelectedAgentId, setActiveSession],
@@ -665,7 +660,55 @@ export function ChatWindow() {
     pointerEvents: isOpen ? "auto" : "none",
   };
 
-  const contextItems = useChatContextItems(wsId);
+  const baseContextItems = useChatContextItems(wsId);
+
+  // Resolve active group session participants for @mention context
+  const activeSessionParticipantIds = currentSession?.is_group
+    ? (currentSession.agent_ids ?? [])
+    : groupAgentIds;
+  const agentNameById = useMemo(
+    () => new Map(agents.map((a) => [a.id, a.name])),
+    [agents],
+  );
+  const participantMentionItems = useMemo(
+    () =>
+      activeSessionParticipantIds
+        .map((id) => agents.find((a) => a.id === id))
+        .filter((a): a is Agent => !!a)
+        .map((a) => ({
+          id: a.id,
+          label: a.name,
+          type: "agent" as const,
+          // "current" group puts participants above issues in the mention popup;
+          // without it they land in "Users" section below the issue groups.
+          group: "current" as const,
+        })),
+    [activeSessionParticipantIds, agents],
+  );
+  const contextItems = useMemo(
+    () => [...participantMentionItems, ...baseContextItems],
+    [participantMentionItems, baseContextItems],
+  );
+
+  // Compute placeholder/greeting name: group sessions list all participant names.
+  // Inline (no useMemo) so it's always fresh on every render.
+  const chatInputGroupIds: string[] | null = currentSession?.is_group
+    ? (currentSession.agent_ids?.length
+        ? currentSession.agent_ids
+        : [currentSession.agent_id])
+    : groupAgentIds.length >= 2
+      ? groupAgentIds
+      : null;
+  const chatInputAgentName: string | undefined = chatInputGroupIds
+    ? (() => {
+        const names = chatInputGroupIds
+          .map((id) => agents.find((a) => a.id === id)?.name)
+          .filter(Boolean) as string[];
+        if (names.length === 0) return activeAgent?.name;
+        if (names.length <= 3) return names.join(", ");
+        return `${names.slice(0, 2).join(", ")}, and ${names.length - 2} more`;
+      })()
+    : activeAgent?.name;
 
   return (
     <motion.div
@@ -690,21 +733,20 @@ export function ChatWindow() {
       {/* Header — ⊕ new + session dropdown | window tools */}
       <div className="flex items-center justify-between border-b px-4 py-2.5 gap-2">
         <div className="flex items-center gap-1 min-w-0">
-          <Tooltip>
-            <TooltipTrigger
-              render={
-                <Button
-                  variant="ghost"
-                  size="icon-sm"
-                  className="rounded-full text-muted-foreground"
-                  onClick={handleNewChat}
-                />
+          <NewChatPicker
+            agents={availableAgents}
+            activeAgentId={activeAgent?.id}
+            onConfirm={(ids, mode) => {
+              if (ids.length === 1) {
+                setSelectedAgentId(ids[0]!);
+                setGroupAgentIds([]);
+              } else {
+                setGroupAgentIds(ids);
+                setGroupRoutingMode(mode ?? "relay");
               }
-            >
-              <Plus />
-            </TooltipTrigger>
-            <TooltipContent side="top">{t(($) => $.window.new_chat_tooltip)}</TooltipContent>
-          </Tooltip>
+              setActiveSession(null);
+            }}
+          />
           <SessionDropdown
             sessions={sessions}
             // Use the full agent list (incl. archived) so historical
@@ -757,17 +799,18 @@ export function ChatWindow() {
         <ChatMessageList
           key={activeSessionId}
           messages={messages}
-          pendingTask={pendingTask}
+          pendingTasksMap={pendingTasksMap ?? {}}
           availability={availability}
           firstItemIndex={firstItemIndex}
           hasOlderMessages={!!hasOlderMessages}
           isFetchingOlderMessages={isFetchingOlderMessages}
           onLoadOlderMessages={() => void fetchOlderMessages()}
+          agentNameById={currentSession?.is_group ? agentNameById : undefined}
         />
       ) : (
         <EmptyState
           hasSessions={sessions.length > 0}
-          agentName={activeAgent?.name}
+          agentName={chatInputAgentName}
           onPickPrompt={(text) => handleSend(text)}
         />
       )}
@@ -798,14 +841,33 @@ export function ChatWindow() {
         isRunning={!!pendingTaskId}
         disabled={isSessionArchived}
         noAgent={noAgent}
-        agentName={activeAgent?.name}
+        agentName={chatInputAgentName}
         leftAdornment={
-          <AgentDropdown
-            agents={availableAgents}
-            activeAgent={activeAgent}
-            userId={user?.id}
-            onSelect={handleSelectAgent}
-          />
+          currentSession?.is_group ? (
+            <GroupSessionIndicator
+              participants={
+                (currentSession.agent_ids ?? [currentSession.agent_id])
+                  .map((id) => agents.find((a) => a.id === id))
+                  .filter((a): a is Agent => !!a)
+              }
+            />
+          ) : groupAgentIds.length >= 2 ? (
+            <GroupSessionIndicator
+              participants={
+                groupAgentIds
+                  .map((id) => agents.find((a) => a.id === id))
+                  .filter((a): a is Agent => !!a)
+              }
+              onClear={() => setGroupAgentIds([])}
+            />
+          ) : (
+            <AgentDropdown
+              agents={availableAgents}
+              activeAgent={activeAgent}
+              userId={user?.id}
+              onSelect={handleSelectAgent}
+            />
+          )
         }
         contextItems={contextItems}
       />
@@ -972,7 +1034,17 @@ function SessionDropdown({
   const agentById = useMemo(() => new Map(agents.map((a) => [a.id, a])), [agents]);
   const activeSession = sessions.find((s) => s.id === activeSessionId);
   const title = activeSession?.title?.trim() || t(($) => $.window.untitled);
-  const triggerAgent = activeSession ? agentById.get(activeSession.agent_id) ?? null : null;
+  // For group sessions show all participant avatars; single sessions show one.
+  const triggerAgents = useMemo(() => {
+    if (!activeSession) return [];
+    if (activeSession.is_group) {
+      return (activeSession.agent_ids ?? [activeSession.agent_id])
+        .map((id) => agentById.get(id))
+        .filter((a): a is Agent => !!a);
+    }
+    const a = agentById.get(activeSession.agent_id);
+    return a ? [a] : [];
+  }, [activeSession, agentById]);
 
   // The old soft-archive feature was removed. Pre-existing rows with
   // status='archived' are legacy dead data and are excluded from history.
@@ -1180,7 +1252,23 @@ function SessionDropdown({
         )}
       >
         {isCurrent && <span className="absolute left-0 top-1.5 bottom-1.5 w-0.5 rounded-full bg-brand" />}
-        {agent ? (
+        {session.is_group ? (
+          <div className="relative w-6 h-6 shrink-0">
+            {(session.agent_ids ?? []).slice(0, 2).map((id, i) => {
+              const a = agentById.get(id);
+              if (!a) return null;
+              return (
+                <div
+                  key={a.id}
+                  className="absolute size-[14px]"
+                  style={{ top: i === 0 ? 0 : 10, left: i === 0 ? 0 : 10 }}
+                >
+                  <ActorAvatar actorType="agent" actorId={a.id} size={14} />
+                </div>
+              );
+            })}
+          </div>
+        ) : agent ? (
           <ActorAvatar
             actorType="agent"
             actorId={agent.id}
@@ -1379,15 +1467,27 @@ function SessionDropdown({
       <Popover open={isHistoryOpen} onOpenChange={setIsHistoryOpen}>
         <div className="flex min-w-0 items-center gap-1">
           <PopoverTrigger className="flex max-w-96 min-w-0 items-center gap-1.5 rounded-md px-1.5 py-1 transition-colors hover:bg-accent data-[popup-open]:bg-accent data-open:bg-accent">
-            {triggerAgent && (
+            {triggerAgents.length === 1 ? (
               <ActorAvatar
                 actorType="agent"
-                actorId={triggerAgent.id}
+                actorId={triggerAgents[0]!.id}
                 size={24}
                 enableHoverCard
                 showStatusDot
               />
-            )}
+            ) : triggerAgents.length > 1 ? (
+              <div className="flex items-center shrink-0">
+                {triggerAgents.slice(0, 3).map((agent, i) => (
+                  <div
+                    key={agent.id}
+                    className="shrink-0 size-5 flex items-center justify-center"
+                    style={{ marginLeft: i === 0 ? 0 : -5 }}
+                  >
+                    <ActorAvatar actorType="agent" actorId={agent.id} size={20} />
+                  </div>
+                ))}
+              </div>
+            ) : null}
             <span className="min-w-0 truncate text-sm font-medium">{title}</span>
             {currentSessionRunning && (
               <Loader2
@@ -1613,6 +1713,201 @@ function EmptyState({
           );
         })}
       </div>
+    </div>
+  );
+}
+
+/**
+ * Unified new-chat button: selecting 1 agent starts a private chat;
+ * selecting 2+ shows routing mode and starts a group chat.
+ */
+function NewChatPicker({
+  agents,
+  activeAgentId,
+  onConfirm,
+}: {
+  agents: Agent[];
+  activeAgentId: string | undefined;
+  onConfirm: (ids: string[], mode: "mention" | "relay" | null) => void;
+}) {
+  const { t } = useT("chat");
+  const [open, setOpen] = useState(false);
+  const [checked, setChecked] = useState<Set<string>>(new Set());
+  const [mode, setMode] = useState<"mention" | "relay">("relay");
+
+  const toggle = (id: string) =>
+    setChecked((prev) => {
+      const next = new Set(prev);
+      if (next.has(id)) next.delete(id);
+      else next.add(id);
+      return next;
+    });
+
+  const handleOpen = (v: boolean) => {
+    if (v) {
+      // Pre-select the current agent so the common "new chat same agent" case
+      // only needs one click on Start.
+      setChecked(activeAgentId ? new Set([activeAgentId]) : new Set());
+      setMode("relay");
+    }
+    setOpen(v);
+  };
+
+  const handleConfirm = () => {
+    const ids = [...checked];
+    onConfirm(ids, ids.length >= 2 ? mode : null);
+    setOpen(false);
+  };
+
+  return (
+    <Popover open={open} onOpenChange={handleOpen}>
+      <Tooltip>
+        <TooltipTrigger
+          render={
+            <PopoverTrigger
+              render={
+                <Button
+                  variant="ghost"
+                  size="icon-sm"
+                  className="rounded-full text-muted-foreground"
+                />
+              }
+            />
+          }
+        >
+          <Plus />
+        </TooltipTrigger>
+        <TooltipContent side="top">{t(($) => $.window.new_chat_tooltip)}</TooltipContent>
+      </Tooltip>
+      <PopoverContent align="start" side="bottom" className="w-72 p-3 space-y-3">
+        <p className="text-sm font-medium">{t(($) => $.group_chat.picker_title)}</p>
+        <div className="space-y-1">
+          <p className="text-xs text-muted-foreground mb-1">{t(($) => $.group_chat.select_agents)}</p>
+          {agents.map((agent) => (
+            <label
+              key={agent.id}
+              className="flex items-center gap-2 rounded-md px-2 py-1.5 cursor-pointer hover:bg-accent text-sm"
+            >
+              <input
+                type="checkbox"
+                checked={checked.has(agent.id)}
+                onChange={() => toggle(agent.id)}
+                className="rounded"
+              />
+              <ActorAvatar actorType="agent" actorId={agent.id} size={20} />
+              <span className="truncate flex-1">{agent.name}</span>
+            </label>
+          ))}
+        </div>
+        {checked.size >= 2 && (
+          <div className="space-y-1">
+            <p className="text-xs text-muted-foreground">{t(($) => $.group_chat.routing_label)}</p>
+            <div className="flex gap-1.5">
+              <button
+                type="button"
+                onClick={() => setMode("mention")}
+                className={cn(
+                  "flex-1 rounded-md px-2 py-1.5 text-xs text-center transition-colors border",
+                  mode === "mention"
+                    ? "bg-brand text-brand-foreground border-brand"
+                    : "border-border hover:bg-accent",
+                )}
+              >
+                {t(($) => $.group_chat.routing_mention)}
+              </button>
+              <button
+                type="button"
+                onClick={() => setMode("relay")}
+                className={cn(
+                  "flex-1 rounded-md px-2 py-1.5 text-xs text-center transition-colors border",
+                  mode === "relay"
+                    ? "bg-brand text-brand-foreground border-brand"
+                    : "border-border hover:bg-accent",
+                )}
+              >
+                {t(($) => $.group_chat.routing_relay)}
+              </button>
+            </div>
+          </div>
+        )}
+        <Button
+          size="sm"
+          className="w-full"
+          disabled={checked.size === 0}
+          onClick={handleConfirm}
+        >
+          {t(($) => $.group_chat.start)}
+        </Button>
+      </PopoverContent>
+    </Popover>
+  );
+}
+
+/**
+ * Replaces AgentDropdown in the ChatInput left adornment when a group session is
+ * active or pending. Shows "Group · N" with optional clear button (for pending group).
+ */
+/**
+ * Replaces AgentDropdown in the ChatInput left adornment when a group session is
+ * active or pending. Shows "Group · N" as a clickable button that opens a popover
+ * listing all participants. Optional clear button for pending (pre-session) group.
+ */
+function GroupSessionIndicator({
+  participants,
+  onClear,
+}: {
+  participants: Agent[];
+  onClear?: () => void;
+}) {
+  const { t } = useT("chat");
+  const [open, setOpen] = useState(false);
+  const label = t(($) => $.window.group_badge);
+
+  return (
+    <div className="flex items-center gap-0.5">
+      <Popover open={open} onOpenChange={setOpen}>
+        <PopoverTrigger
+          render={
+            <button
+              type="button"
+              className="flex items-center gap-1.5 rounded-md px-1.5 py-1 text-xs font-medium text-muted-foreground transition-colors hover:bg-accent hover:text-foreground aria-expanded:bg-accent"
+            />
+          }
+        >
+          <Users className="size-3.5 shrink-0" />
+          <span>{label} · {participants.length}</span>
+          {participants.length > 0 && (
+            <div className="flex items-center">
+              {participants.slice(0, 3).map((agent, i) => (
+                <div
+                  key={agent.id}
+                  className="shrink-0 size-[14px]"
+                  style={{ marginLeft: i === 0 ? 2 : -3 }}
+                >
+                  <ActorAvatar actorType="agent" actorId={agent.id} size={14} />
+                </div>
+              ))}
+            </div>
+          )}
+        </PopoverTrigger>
+        <PopoverContent align="start" side="top" className="w-52 p-2 space-y-0.5">
+          {participants.map((agent) => (
+            <div key={agent.id} className="flex items-center gap-2 rounded-md px-2 py-1.5 text-sm">
+              <ActorAvatar actorType="agent" actorId={agent.id} size={20} showStatusDot />
+              <span className="truncate flex-1">{agent.name}</span>
+            </div>
+          ))}
+        </PopoverContent>
+      </Popover>
+      {onClear && (
+        <button
+          type="button"
+          onClick={onClear}
+          className="flex size-5 items-center justify-center rounded text-muted-foreground transition-colors hover:bg-accent hover:text-foreground text-xs leading-none"
+        >
+          ×
+        </button>
+      )}
     </div>
   );
 }

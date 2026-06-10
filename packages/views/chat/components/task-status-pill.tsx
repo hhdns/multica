@@ -7,6 +7,7 @@ import type { AgentAvailability } from "@multica/core/agents";
 import type { ChatPendingTask, TaskMessagePayload } from "@multica/core/types";
 import { formatElapsedSecs } from "../lib/format";
 import { useT } from "../../i18n";
+import { ActorAvatar } from "../../common/actor-avatar";
 
 interface Props {
   /** Server-authoritative pending-task snapshot (`created_at` anchors the timer). */
@@ -15,6 +16,8 @@ interface Props {
   taskMessages: readonly TaskMessagePayload[];
   /** Resolved presence; pass `undefined` to suppress availability hints. */
   availability: AgentAvailability | undefined;
+  /** Group session: the agent currently running this task. */
+  groupAgent?: { id: string; name: string } | null;
 }
 
 interface Stage {
@@ -132,6 +135,7 @@ export function TaskStatusPill({
   pendingTask,
   taskMessages,
   availability,
+  groupAgent,
 }: Props) {
   const resolveStage = useResolveStage();
   // Anchor: locked on first render. Once set we never reassign — otherwise
@@ -167,6 +171,13 @@ export function TaskStatusPill({
       className="flex items-center gap-1.5 px-1 text-xs text-muted-foreground"
       aria-live="polite"
     >
+      {groupAgent && (
+        <>
+          <ActorAvatar actorType="agent" actorId={groupAgent.id} size={16} />
+          <span className="font-medium text-foreground">{groupAgent.name}</span>
+          <span className="opacity-40">·</span>
+        </>
+      )}
       {!stage.static && (
         <UnicodeSpinner name="breathe" className="opacity-70" />
       )}

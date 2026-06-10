@@ -80,7 +80,7 @@ import type {
   TaskCancelledPayload,
   ChatDonePayload,
   ChatMessage,
-  ChatPendingTask,
+  ChatPendingTasksMap,
   ChatMessagesPage,
   InvitationCreatedPayload,
 } from "../types";
@@ -129,10 +129,16 @@ export function applyChatDoneToCache(
       (old) => patchLatestChatMessagePage(old, assistant),
     );
   }
-  // Replacement is in the messages list now; safe to drop pending.
-  qc.setQueryData(chatKeys.pendingTask(sessionId), {});
+  // Remove only the completed task from the map; other agents still thinking remain.
+  qc.setQueryData<ChatPendingTasksMap>(chatKeys.pendingTask(sessionId), (old) => {
+    if (!old || !taskId || !(taskId in old)) return old;
+    const next = { ...old };
+    delete next[taskId];
+    return next;
+  });
   // Authoritative refetch reconciles redaction / migrations / clients
-  // that took the fallback branch above.
+  // that took the fallback branch above, and surfaces the next running
+  // agent's task for group sessions.
   invalidateChatMessageQueries(qc, sessionId);
   qc.invalidateQueries({ queryKey: chatKeys.pendingTask(sessionId) });
 }
@@ -884,68 +890,59 @@ export function useRealtimeSync(
     // when reconnect replays the event for an already-running task).
     const unsubTaskQueued = ws.on("task:queued", (p) => {
       const payload = p as TaskQueuedPayload;
-      if (!payload.chat_session_id) return;
-      qc.setQueryData<ChatPendingTask>(
+      if (!payload.chat_session_id || !payload.task_id) return;
+      qc.setQueryData<ChatPendingTasksMap>(
         chatKeys.pendingTask(payload.chat_session_id),
         (old) => ({
           ...(old ?? {}),
-          task_id: payload.task_id,
-          status: "queued",
+          [payload.task_id]: {
+            task_id: payload.task_id,
+            agent_id: payload.agent_id,
+            status: "queued",
+          },
         }),
       );
       invalidatePendingAggregate();
     });
 
-    // task:dispatch fires when the daemon claims the queued task. The daemon
-    // immediately follows with StartTask, so dispatched→running is sub-second.
-    // We collapse that window by writing "running" directly — the pill jumps
-    // from "Queued" straight to "Thinking", skipping a meaningless "Starting"
-    // frame. Stage decision in TaskStatusPill maps "running" + empty
-    // taskMessages → "Thinking · Ns".
+    // task:dispatch: collapse dispatched→running immediately so the pill shows
+    // "Thinking" without a "Starting" flash. Update in-place by task_id.
     const unsubTaskDispatch = ws.on("task:dispatch", (p) => {
       const payload = p as TaskDispatchPayload;
-      if (!payload.chat_session_id) return;
-      qc.setQueryData<ChatPendingTask>(
+      if (!payload.chat_session_id || !payload.task_id) return;
+      qc.setQueryData<ChatPendingTasksMap>(
         chatKeys.pendingTask(payload.chat_session_id),
         (old) => {
-          if (!old || old.task_id !== payload.task_id) return old;
-          return { ...old, status: "running" };
+          if (!old) return old;
+          const entry = old[payload.task_id] ?? { task_id: payload.task_id };
+          return { ...old, [payload.task_id]: { ...entry, agent_id: payload.agent_id, status: "running" } };
         },
       );
     });
 
-    // task:running fires when the daemon transitions a previously-parked task
-    // (waiting_local_directory) back into the run phase. The dispatch→running
-    // path is collapsed in the handler above, so this handler exists mainly to
-    // clear a stale `waiting_local_directory` pill — without it, the pill
-    // would stay parked even after the daemon resumed work.
+    // task:running clears a stale waiting_local_directory status.
     const unsubTaskRunning = ws.on("task:running", (p) => {
       const payload = p as TaskRunningPayload;
-      if (!payload.chat_session_id) return;
-      qc.setQueryData<ChatPendingTask>(
+      if (!payload.chat_session_id || !payload.task_id) return;
+      qc.setQueryData<ChatPendingTasksMap>(
         chatKeys.pendingTask(payload.chat_session_id),
         (old) => {
-          if (!old || old.task_id !== payload.task_id) return old;
-          return { ...old, status: "running" };
+          if (!old || !(payload.task_id in old)) return old;
+          return { ...old, [payload.task_id]: { ...old[payload.task_id], status: "running" } };
         },
       );
     });
 
-    // task:waiting_local_directory fires when the daemon dequeues a task but
-    // can't acquire the local_directory path lock — another task on this
-    // daemon is in the same directory. Write the status so TaskStatusPill
-    // can render the "Waiting for local directory" stage instead of pinning
-    // a stale "Starting / Thinking" frame.
     const unsubTaskWaitingLocalDir = ws.on(
       "task:waiting_local_directory",
       (p) => {
         const payload = p as TaskWaitingLocalDirectoryPayload;
-        if (!payload.chat_session_id) return;
-        qc.setQueryData<ChatPendingTask>(
+        if (!payload.chat_session_id || !payload.task_id) return;
+        qc.setQueryData<ChatPendingTasksMap>(
           chatKeys.pendingTask(payload.chat_session_id),
           (old) => {
-            if (!old || old.task_id !== payload.task_id) return old;
-            return { ...old, status: "waiting_local_directory" };
+            if (!old || !(payload.task_id in old)) return old;
+            return { ...old, [payload.task_id]: { ...old[payload.task_id], status: "waiting_local_directory" } };
           },
         );
       },
@@ -966,7 +963,15 @@ export function useRealtimeSync(
         task_id: payload.task_id,
         chat_session_id: payload.chat_session_id,
       });
-      qc.setQueryData(chatKeys.pendingTask(payload.chat_session_id), {});
+      qc.setQueryData<ChatPendingTasksMap>(
+        chatKeys.pendingTask(payload.chat_session_id),
+        (old) => {
+          if (!old || !payload.task_id || !(payload.task_id in old)) return old ?? {};
+          const next = { ...old };
+          delete next[payload.task_id];
+          return next;
+        },
+      );
       invalidateChatMessageQueries(qc, payload.chat_session_id);
       invalidatePendingAggregate();
     });
@@ -1000,7 +1005,12 @@ export function useRealtimeSync(
       // failure bubble shows up without requiring a page refresh. Pre-#1823
       // this branch only flipped pending — the comment "No new message"
       // was true then, but FailTask now persists a row.
-      qc.setQueryData(chatKeys.pendingTask(payload.chat_session_id), {});
+      qc.setQueryData<ChatPendingTasksMap>(chatKeys.pendingTask(payload.chat_session_id), (old) => {
+        if (!old || !payload.task_id || !(payload.task_id in old)) return old ?? {};
+        const next = { ...old };
+        delete next[payload.task_id];
+        return next;
+      });
       invalidateChatMessageQueries(qc, payload.chat_session_id);
       qc.invalidateQueries({ queryKey: chatKeys.pendingTask(payload.chat_session_id) });
       invalidatePendingAggregate();

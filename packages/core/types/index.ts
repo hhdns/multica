@@ -85,6 +85,7 @@ export type {
   ChatMessage,
   ChatMessagesPage,
   ChatPendingTask,
+  ChatPendingTasksMap,
   PendingChatTaskItem,
   PendingChatTasksResponse,
   SendChatMessageResponse,

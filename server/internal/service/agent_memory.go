@@ -1272,10 +1272,26 @@ Output only the memory text, no preamble.`,
 // them as a compact dialogue transcript. Prefers chat messages over the
 // internal task execution log because they capture what was actually said,
 // not the agent's tool-call trace.
+//
+// For group sessions, assistant messages are labelled with the agent's name
+// when the agent_id is available, so episode summaries can distinguish
+// who said what.
 func buildChatSessionTranscript(ctx context.Context, q *db.Queries, sessionID pgtype.UUID, maxChars int) string {
 	msgs, err := q.ListChatMessages(ctx, sessionID)
 	if err != nil || len(msgs) == 0 {
 		return ""
+	}
+	// Pre-resolve agent names for attribution (group sessions only).
+	agentNames := map[string]string{}
+	for _, m := range msgs {
+		if m.AgentID.Valid {
+			id := m.AgentID
+			if _, seen := agentNames[id.String()]; !seen {
+				if a, err := q.GetAgent(ctx, id); err == nil {
+					agentNames[id.String()] = a.Name
+				}
+			}
+		}
 	}
 	var sb strings.Builder
 	for _, m := range msgs {
@@ -1286,6 +1302,10 @@ func buildChatSessionTranscript(ctx context.Context, q *db.Queries, sessionID pg
 		prefix := "assistant"
 		if m.Role == "user" {
 			prefix = "user"
+		} else if m.AgentID.Valid {
+			if name, ok := agentNames[m.AgentID.String()]; ok {
+				prefix = name
+			}
 		}
 		if len(content) > 400 {
 			content = content[:400] + "…"

@@ -12,12 +12,19 @@ export function useCreateChatSession() {
   const wsId = useWorkspaceId();
 
   return useMutation({
-    mutationFn: (data: { agent_id: string; title?: string }) => {
-      logger.info("createChatSession.start", { agent_id: data.agent_id, titleLength: data.title?.length ?? 0 });
+    mutationFn: (data: { agent_id: string; title?: string; agent_ids?: string[]; routing_mode?: string }) => {
+      logger.info("createChatSession.start", { agent_id: data.agent_id, titleLength: data.title?.length ?? 0, is_group: !!data.agent_ids?.length });
       return api.createChatSession(data);
     },
     onSuccess: (session) => {
       logger.info("createChatSession.success", { sessionId: session.id, agentId: session.agent_id });
+      // Inject the created session into the cache immediately so group session
+      // metadata (is_group, agent_ids) is available before the list refetch.
+      qc.setQueryData<ChatSession[]>(chatKeys.sessions(wsId), (old) => {
+        if (!old) return [session];
+        if (old.some((s) => s.id === session.id)) return old;
+        return [session, ...old];
+      });
     },
     onError: (err) => {
       logger.error("createChatSession.error", err);

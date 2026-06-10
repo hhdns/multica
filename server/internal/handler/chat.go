@@ -189,6 +189,10 @@ func (h *Handler) ListChatSessions(w http.ResponseWriter, r *http.Request) {
 			if _, ok := allowed[uuidToString(s.AgentID)]; !ok {
 				continue
 			}
+			var participantIDs []string
+			if s.IsGroup {
+				participantIDs = h.fetchParticipantStrings(r.Context(), s.ID)
+			}
 			resp = append(resp, ChatSessionResponse{
 				ID:          uuidToString(s.ID),
 				WorkspaceID: uuidToString(s.WorkspaceID),
@@ -198,6 +202,7 @@ func (h *Handler) ListChatSessions(w http.ResponseWriter, r *http.Request) {
 				Status:      s.Status,
 				HasUnread:   s.HasUnread,
 				IsGroup:     s.IsGroup,
+				AgentIDs:    participantIDs,
 				RoutingMode: s.RoutingMode.String,
 				CreatedAt:   timestampToString(s.CreatedAt),
 				UpdatedAt:   timestampToString(s.UpdatedAt),
@@ -217,6 +222,10 @@ func (h *Handler) ListChatSessions(w http.ResponseWriter, r *http.Request) {
 			if _, ok := allowed[uuidToString(s.AgentID)]; !ok {
 				continue
 			}
+			var participantIDs []string
+			if s.IsGroup {
+				participantIDs = h.fetchParticipantStrings(r.Context(), s.ID)
+			}
 			resp = append(resp, ChatSessionResponse{
 				ID:          uuidToString(s.ID),
 				WorkspaceID: uuidToString(s.WorkspaceID),
@@ -226,6 +235,7 @@ func (h *Handler) ListChatSessions(w http.ResponseWriter, r *http.Request) {
 				Status:      s.Status,
 				HasUnread:   s.HasUnread,
 				IsGroup:     s.IsGroup,
+				AgentIDs:    participantIDs,
 				RoutingMode: s.RoutingMode.String,
 				CreatedAt:   timestampToString(s.CreatedAt),
 				UpdatedAt:   timestampToString(s.UpdatedAt),
@@ -552,6 +562,11 @@ func (h *Handler) SendChatMessage(w http.ResponseWriter, r *http.Request) {
 	resolvedSessionID := uuidToString(session.ID)
 
 	if session.IsGroup {
+		// Cancel any tasks still running from the previous round before starting
+		// a new one. Without this, stale tasks would post out-of-order replies and
+		// agents processing the new message would have incomplete context.
+		h.TaskService.CancelGroupChatPreviousRound(r.Context(), session.ID)
+
 		// Group chat: resolve target agents then enqueue one task per target.
 		targetIDs, err := h.resolveGroupChatTargets(r.Context(), session, req.Content)
 		if err != nil {
@@ -799,8 +814,42 @@ func (h *Handler) ListChatMessagesPage(w http.ResponseWriter, r *http.Request) {
 // survive refresh / reopen.
 type PendingChatTaskResponse struct {
 	TaskID    string `json:"task_id,omitempty"`
+	AgentID   string `json:"agent_id,omitempty"`
 	Status    string `json:"status,omitempty"`
 	CreatedAt string `json:"created_at,omitempty"`
+}
+
+// ListPendingChatTasksForSession returns all in-flight tasks for a single chat
+// session. Used by group sessions where multiple agents may be thinking at once.
+func (h *Handler) ListPendingChatTasksForSession(w http.ResponseWriter, r *http.Request) {
+	userID, ok := requireUserID(w, r)
+	if !ok {
+		return
+	}
+	workspaceID := ctxWorkspaceID(r.Context())
+	sessionID := chi.URLParam(r, "sessionId")
+
+	session, ok := h.gateChatSessionForUser(w, r, userID, workspaceID, sessionID)
+	if !ok {
+		return
+	}
+
+	tasks, err := h.Queries.ListPendingChatTasksForSession(r.Context(), session.ID)
+	if err != nil {
+		writeJSON(w, http.StatusOK, []PendingChatTaskResponse{})
+		return
+	}
+
+	resp := make([]PendingChatTaskResponse, len(tasks))
+	for i, t := range tasks {
+		resp[i] = PendingChatTaskResponse{
+			TaskID:    uuidToString(t.ID),
+			AgentID:   uuidToString(t.AgentID),
+			Status:    t.Status,
+			CreatedAt: timestampToString(t.CreatedAt),
+		}
+	}
+	writeJSON(w, http.StatusOK, resp)
 }
 
 // MarkChatSessionRead clears the session's unread_since (→ has_unread=false)
@@ -947,6 +996,7 @@ func (h *Handler) GetPendingChatTask(w http.ResponseWriter, r *http.Request) {
 
 	writeJSON(w, http.StatusOK, PendingChatTaskResponse{
 		TaskID:    uuidToString(task.ID),
+		AgentID:   uuidToString(task.AgentID),
 		Status:    task.Status,
 		CreatedAt: timestampToString(task.CreatedAt),
 	})
@@ -1103,6 +1153,20 @@ type ChatMessageResponse struct {
 	Attachments []AttachmentResponse `json:"attachments,omitempty"`
 }
 
+// fetchParticipantStrings returns participant agent IDs as strings for a
+// group chat session. Returns nil on error or empty result.
+func (h *Handler) fetchParticipantStrings(ctx context.Context, sessionID pgtype.UUID) []string {
+	ids, err := h.Queries.GetChatSessionParticipants(ctx, sessionID)
+	if err != nil || len(ids) == 0 {
+		return nil
+	}
+	strs := make([]string, len(ids))
+	for i, id := range ids {
+		strs[i] = uuidToString(id)
+	}
+	return strs
+}
+
 // chatSessionToResponse converts a DB row to a response. participantIDs is
 // populated for group sessions; pass nil for single-agent sessions.
 func chatSessionToResponse(s db.ChatSession, participantIDs []string) ChatSessionResponse {
@@ -1176,11 +1240,12 @@ func (h *Handler) resolveGroupChatTargets(ctx context.Context, session db.ChatSe
 		return nil, nil // mention mode: silence when no @mention
 	}
 
-	// Relay mode: continue with last responding agent.
-	lastAgentID, err := h.Queries.GetLastAssistantAgentInSession(ctx, session.ID)
-	if err != nil {
-		// No assistant message yet — use primary agent.
-		return []pgtype.UUID{session.AgentID}, nil
+	// Relay mode: broadcast every message to all participants. Each agent
+	// decides independently whether to respond (by outputting [SILENT] to
+	// stay quiet). This mirrors natural group-chat behaviour — everyone hears
+	// the message and chooses whether they have something worth saying.
+	if len(participantUUIDs) > 0 {
+		return participantUUIDs, nil
 	}
-	return []pgtype.UUID{lastAgentID}, nil
+	return []pgtype.UUID{session.AgentID}, nil
 }

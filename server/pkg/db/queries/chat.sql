@@ -140,10 +140,17 @@ LIMIT 1;
 -- created_at is the anchor for the chat StatusPill timer (it computes
 -- elapsed = now - task.created_at), so the pill survives refresh / reopen
 -- without "resetting to 0s".
-SELECT id, status, created_at FROM agent_task_queue
+SELECT id, agent_id, status, created_at FROM agent_task_queue
 WHERE chat_session_id = $1 AND status IN ('queued', 'dispatched', 'running', 'waiting_local_directory')
 ORDER BY created_at DESC
 LIMIT 1;
+
+-- name: ListPendingChatTasksForSession :many
+-- Returns all in-flight tasks for a chat session. Used by group sessions
+-- where multiple agents may be thinking simultaneously.
+SELECT id, agent_id, status, created_at FROM agent_task_queue
+WHERE chat_session_id = $1 AND status IN ('queued', 'dispatched', 'running', 'waiting_local_directory')
+ORDER BY created_at ASC;
 
 -- name: ListPendingChatTasksByCreator :many
 -- Aggregate view of all in-flight chat tasks owned by a given creator in a

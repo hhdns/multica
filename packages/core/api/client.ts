@@ -69,6 +69,7 @@ import type {
   ChatMessage,
   ChatMessagesPage,
   ChatPendingTask,
+  ChatPendingTasksMap,
   PendingChatTasksResponse,
   SendChatMessageResponse,
   CancelTaskResponse,
@@ -1749,7 +1750,7 @@ export class ApiClient {
     return this.fetch(`/api/chat/sessions/${id}`);
   }
 
-  async createChatSession(data: { agent_id: string; title?: string }): Promise<ChatSession> {
+  async createChatSession(data: { agent_id: string; title?: string; agent_ids?: string[]; routing_mode?: string }): Promise<ChatSession> {
     return this.fetch("/api/chat/sessions", {
       method: "POST",
       body: JSON.stringify(data),
@@ -1819,6 +1820,15 @@ export class ApiClient {
 
   async getPendingChatTask(sessionId: string): Promise<ChatPendingTask> {
     return this.fetch(`/api/chat/sessions/${sessionId}/pending-task`);
+  }
+
+  async listPendingChatTasksForSession(sessionId: string): Promise<ChatPendingTasksMap> {
+    const tasks: ChatPendingTask[] = await this.fetch(`/api/chat/sessions/${sessionId}/pending-tasks`);
+    const map: ChatPendingTasksMap = {};
+    for (const t of tasks) {
+      if (t.task_id) map[t.task_id] = t;
+    }
+    return map;
   }
 
   async listPendingChatTasks(): Promise<PendingChatTasksResponse> {

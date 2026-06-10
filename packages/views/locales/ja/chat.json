@@ -77,7 +77,9 @@
     "others": "その他",
     "no_agents": "エージェントなし",
     "history_group": "チャット履歴",
-    "agent_filter_placeholder": "エージェントを検索..."
+    "agent_filter_placeholder": "エージェントを検索...",
+    "group_chat_tooltip": "グループチャット",
+    "group_badge": "グループ"
   },
   "empty_state": {
     "first_time_title": "エージェントとチャット",
@@ -118,5 +120,14 @@
       "searching_web": "ウェブを検索中",
       "fallback": "作業中"
     }
+  },
+  "group_chat": {
+    "picker_title": "新しいチャット",
+    "select_agents": "エージェントを選択",
+    "routing_label": "@メンションがない場合",
+    "routing_mention": "黙認する",
+    "routing_relay": "最後の返信者が続ける",
+    "start": "開始",
+    "indicator": "グループ · {count}"
   }
 }

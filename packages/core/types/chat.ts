@@ -11,6 +11,13 @@ export interface ChatSession {
   has_unread: boolean;
   created_at: string;
   updated_at: string;
+  /** True for group chat sessions with multiple agent participants. */
+  is_group?: boolean;
+  /** Ordered participant agent IDs (group sessions only). */
+  agent_ids?: string[];
+  /** How the session routes messages: "mention" (only @-mentioned agents respond)
+   *  or "relay" (last responder continues the thread). */
+  routing_mode?: "mention" | "relay" | null;
 }
 
 export interface PendingChatTaskItem {
@@ -30,6 +37,8 @@ export interface ChatMessage {
   content: string;
   task_id: string | null;
   created_at: string;
+  /** Agent that wrote this message (set on assistant messages in group sessions). */
+  agent_id?: string | null;
   /**
    * Attachments linked to this message via the attachment table's
    * chat_message_id FK. Populated by ListChatMessages. UI renders these
@@ -86,6 +95,8 @@ export interface SendChatMessageResponse {
    * compat with servers that predate the field.
    */
   attachment_ids?: string[];
+  /** All task IDs created for this message (group sessions: one per agent). */
+  task_ids?: string[];
 }
 
 export interface CancelledChatMessage {
@@ -115,6 +126,15 @@ export interface CancelTaskResponse extends AgentTask {
  */
 export interface ChatPendingTask {
   task_id?: string;
+  /** Agent running this task; populated from task:queued WS event for group attribution. */
+  agent_id?: string;
   status?: string;
   created_at?: string;
 }
+
+/**
+ * Map of task_id → ChatPendingTask for a session.
+ * Empty object = no in-flight tasks.
+ * Group sessions may have multiple entries simultaneously.
+ */
+export type ChatPendingTasksMap = Record<string, ChatPendingTask>;

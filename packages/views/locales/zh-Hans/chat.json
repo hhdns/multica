@@ -77,7 +77,9 @@
     "others": "其他",
     "no_agents": "暂无智能体",
     "history_group": "历史对话",
-    "agent_filter_placeholder": "搜索智能体..."
+    "agent_filter_placeholder": "搜索智能体...",
+    "group_chat_tooltip": "群聊",
+    "group_badge": "群聊"
   },
   "empty_state": {
     "first_time_title": "和你的智能体对话",
@@ -118,5 +120,14 @@
       "searching_web": "搜索网页",
       "fallback": "处理中"
     }
+  },
+  "group_chat": {
+    "picker_title": "新对话",
+    "select_agents": "选择成员",
+    "routing_label": "没有人被 @ 时",
+    "routing_mention": "保持沉默",
+    "routing_relay": "上一个回复者继续",
+    "start": "发起",
+    "indicator": "群聊 · {count}"
   }
 }

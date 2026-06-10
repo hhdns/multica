@@ -80,7 +80,9 @@
     "others": "기타",
     "no_agents": "에이전트 없음",
     "history_group": "채팅 기록",
-    "agent_filter_placeholder": "에이전트 검색..."
+    "agent_filter_placeholder": "에이전트 검색...",
+    "group_chat_tooltip": "그룹 채팅",
+    "group_badge": "그룹"
   },
   "empty_state": {
     "first_time_title": "에이전트와 채팅하기",
@@ -121,5 +123,14 @@
       "searching_web": "웹 검색 중",
       "fallback": "작업 중"
     }
+  },
+  "group_chat": {
+    "picker_title": "새 채팅",
+    "select_agents": "에이전트 선택",
+    "routing_label": "@멘션이 없을 때",
+    "routing_mention": "조용히 있기",
+    "routing_relay": "마지막 응답자가 계속",
+    "start": "시작",
+    "indicator": "그룹 · {count}"
   }
 }
