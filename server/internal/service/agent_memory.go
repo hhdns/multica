@@ -120,6 +120,7 @@ func RebuildWorkspaceEmbeddings(ctx context.Context, q *db.Queries, workspaceID 
 	// Using a fixed OFFSET would skip records that are still NULL after partial
 	// success in the previous batch.
 	// If an entire batch fails (embedding service down), stop to avoid looping.
+	var totalSucceeded int
 	for {
 		batch, err := q.ListMemoriesNeedingEmbedding(ctx, db.ListMemoriesNeedingEmbeddingParams{
 			WorkspaceID: workspaceID,
@@ -138,12 +139,18 @@ func RebuildWorkspaceEmbeddings(ctx context.Context, q *db.Queries, workspaceID 
 			if err := q.SetAgentMemoryEmbedding(ctx, db.SetAgentMemoryEmbeddingParams{
 				ID:        m.ID,
 				Embedding: pgvector.NewVector(vec),
-			}); err == nil {
+			}); err != nil {
+				slog.Warn("rebuild embeddings: failed to store embedding",
+					"memory_id", m.ID,
+					"vec_dims", len(vec),
+					"error", err)
+			} else {
 				succeeded++
 			}
 		}
+		totalSucceeded += succeeded
 		if succeeded == 0 {
-			// Embedding service is not responding; stop rather than loop forever.
+			// Embedding service is not responding or vector dimension mismatch; stop.
 			slog.Warn("rebuild embeddings: batch produced no successes, stopping early",
 				"workspace_id", workspaceID.Bytes,
 				"remaining_null", len(batch))
@@ -152,18 +159,23 @@ func RebuildWorkspaceEmbeddings(ctx context.Context, q *db.Queries, workspaceID 
 		time.Sleep(50 * time.Millisecond)
 	}
 
-	// Record the new model, timestamp, and clear the stale flag.
-	now := time.Now().UTC()
-	_ = q.UpsertSystemConfig(ctx, db.UpsertSystemConfigParams{
-		Key:   embeddingModelConfigKey,
-		Value: CurrentEmbeddingModel(),
-	})
-	_ = q.UpsertSystemConfig(ctx, db.UpsertSystemConfigParams{
-		Key:   embeddingLastRebuiltAtKey,
-		Value: now.Format(time.RFC3339),
-	})
-	embeddingLastRebuiltAt.Store(&now)
-	embeddingModelStale.Store(false)
+	// Only record success metadata when at least one embedding was written.
+	// If every batch failed (e.g. wrong model name, bad API key), leave the
+	// timestamp and stale flag as-is so the UI correctly reflects that no
+	// successful rebuild has occurred.
+	if totalSucceeded > 0 {
+		now := time.Now().UTC()
+		_ = q.UpsertSystemConfig(ctx, db.UpsertSystemConfigParams{
+			Key:   embeddingModelConfigKey,
+			Value: CurrentEmbeddingModel(),
+		})
+		_ = q.UpsertSystemConfig(ctx, db.UpsertSystemConfigParams{
+			Key:   embeddingLastRebuiltAtKey,
+			Value: now.Format(time.RFC3339),
+		})
+		embeddingLastRebuiltAt.Store(&now)
+		embeddingModelStale.Store(false)
+	}
 	return nil
 }
 
@@ -179,9 +191,10 @@ func RebuildWorkspaceEmbeddings(ctx context.Context, q *db.Queries, workspaceID 
 //     embedding API); falls through to disabled.
 //  4. Neither → embedding disabled; memories are stored without vectors.
 type embedConfig struct {
-	endpoint string
-	apiKey   string
-	model    string
+	endpoint   string
+	apiKey     string
+	model      string
+	dimensions int // 0 = model default; set PERSONA_EMBEDDING_DIMENSIONS to override
 }
 
 func resolveEmbedConfig() embedConfig {
@@ -190,6 +203,10 @@ func resolveEmbedConfig() embedConfig {
 	}
 
 	model := os.Getenv("PERSONA_EMBEDDING_MODEL")
+	var dimensions int
+	if s := os.Getenv("PERSONA_EMBEDDING_DIMENSIONS"); s != "" {
+		fmt.Sscanf(s, "%d", &dimensions) //nolint:errcheck
+	}
 
 	// Dedicated embedding base URL — takes precedence over PERSONA_SYNTHESIS_BASE_URL.
 	// Use this when the embedding model is served at a different endpoint than the
@@ -204,9 +221,10 @@ func resolveEmbedConfig() embedConfig {
 			apiKey = os.Getenv("PERSONA_SYNTHESIS_API_KEY")
 		}
 		return embedConfig{
-			endpoint: strings.TrimRight(base, "/") + "/embeddings",
-			apiKey:   apiKey,
-			model:    model,
+			endpoint:   strings.TrimRight(base, "/") + "/embeddings",
+			apiKey:     apiKey,
+			model:      model,
+			dimensions: dimensions,
 		}
 	}
 
@@ -217,9 +235,10 @@ func resolveEmbedConfig() embedConfig {
 			model = "nomic-embed-text"
 		}
 		return embedConfig{
-			endpoint: strings.TrimRight(base, "/") + "/embeddings",
-			apiKey:   os.Getenv("PERSONA_SYNTHESIS_API_KEY"),
-			model:    model,
+			endpoint:   strings.TrimRight(base, "/") + "/embeddings",
+			apiKey:     os.Getenv("PERSONA_SYNTHESIS_API_KEY"),
+			model:      model,
+			dimensions: dimensions,
 		}
 	}
 
@@ -229,9 +248,10 @@ func resolveEmbedConfig() embedConfig {
 			model = "text-embedding-3-small"
 		}
 		return embedConfig{
-			endpoint: "https://api.openai.com/v1/embeddings",
-			apiKey:   key,
-			model:    model,
+			endpoint:   "https://api.openai.com/v1/embeddings",
+			apiKey:     key,
+			model:      model,
+			dimensions: dimensions,
 		}
 	}
 
@@ -251,8 +271,9 @@ func Embed(ctx context.Context, text string) []float32 {
 	}
 
 	type embedRequest struct {
-		Model string `json:"model"`
-		Input string `json:"input"`
+		Model      string   `json:"model"`
+		Input      []string `json:"input"`
+		Dimensions int      `json:"dimensions,omitempty"`
 	}
 	type embedData struct {
 		Embedding []float32 `json:"embedding"`
@@ -264,7 +285,7 @@ func Embed(ctx context.Context, text string) []float32 {
 		} `json:"error"`
 	}
 
-	body, err := json.Marshal(embedRequest{Model: cfg.model, Input: text})
+	body, err := json.Marshal(embedRequest{Model: cfg.model, Input: []string{text}, Dimensions: cfg.dimensions})
 	if err != nil {
 		return nil
 	}
@@ -303,9 +324,15 @@ func Embed(ctx context.Context, text string) []float32 {
 			continue
 		}
 
+		if resp.StatusCode >= 400 {
+			lastErr = fmt.Sprintf("HTTP %d: %s", resp.StatusCode, strings.TrimSpace(string(raw)))
+			slog.Warn("embed: HTTP error", "status", resp.StatusCode, "body", string(raw))
+			continue
+		}
 		var er embedResponse
 		if err := json.Unmarshal(raw, &er); err != nil {
 			lastErr = "unmarshal: " + err.Error()
+			slog.Warn("embed: unmarshal failed", "body", string(raw))
 			continue
 		}
 		if er.Error != nil {
@@ -313,7 +340,8 @@ func Embed(ctx context.Context, text string) []float32 {
 			continue
 		}
 		if len(er.Data) == 0 {
-			lastErr = fmt.Sprintf("empty data (HTTP %d)", resp.StatusCode)
+			lastErr = fmt.Sprintf("empty data (HTTP %d): %s", resp.StatusCode, string(raw))
+			slog.Warn("embed: empty data in response", "status", resp.StatusCode, "body", string(raw))
 			continue
 		}
 		return er.Data[0].Embedding
@@ -333,10 +361,11 @@ func ProbeEmbeddingModel(ctx context.Context) error {
 	}
 
 	type embedRequest struct {
-		Model string `json:"model"`
-		Input string `json:"input"`
+		Model      string   `json:"model"`
+		Input      []string `json:"input"`
+		Dimensions int      `json:"dimensions,omitempty"`
 	}
-	body, _ := json.Marshal(embedRequest{Model: cfg.model, Input: "ping"})
+	body, _ := json.Marshal(embedRequest{Model: cfg.model, Input: []string{"ping"}, Dimensions: cfg.dimensions})
 
 	probeCtx, cancel := context.WithTimeout(ctx, 8*time.Second)
 	defer cancel()

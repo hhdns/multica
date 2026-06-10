@@ -129,6 +129,11 @@ services:
       PERSONA_EMBEDDING_BASE_URL: ${PERSONA_EMBEDDING_BASE_URL:-}
       PERSONA_EMBEDDING_API_KEY: ${PERSONA_EMBEDDING_API_KEY:-}
       PERSONA_EMBEDDING_MODEL: ${PERSONA_EMBEDDING_MODEL:-}
+      # Output dimension override. Set to match your DB column (default 1024).
+      # Required for models that produce >1024 dims (e.g. gemini-embedding-2
+      # returns 3072 by default; set PERSONA_EMBEDDING_DIMENSIONS=1024 to
+      # reduce to a pgvector-HNSW-compatible size).
+      PERSONA_EMBEDDING_DIMENSIONS: ${PERSONA_EMBEDDING_DIMENSIONS:-}
     restart: unless-stopped
 
   frontend:
