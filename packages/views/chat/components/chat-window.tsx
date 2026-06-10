@@ -706,7 +706,9 @@ export function ChatWindow() {
         const names = chatInputGroupIds
           .map((id) => agents.find((a) => a.id === id)?.name)
           .filter(Boolean) as string[];
-        if (names.length === 0) return activeAgent?.name;
+        // Don't bleed a single-agent name (e.g. the previous private-chat
+        // session's agent) into a group context while the agents query resolves.
+        if (names.length === 0) return undefined;
         if (names.length <= 3) return names.join(", ");
         return `${names.slice(0, 2).join(", ")}, and ${names.length - 2} more`;
       })()
@@ -1256,17 +1258,24 @@ function SessionDropdown({
       >
         {isCurrent && <span className="absolute left-0 top-1.5 bottom-1.5 w-0.5 rounded-full bg-brand" />}
         {session.is_group ? (
-          <div className="relative w-6 h-6 shrink-0">
-            {(session.agent_ids ?? []).slice(0, 2).map((id, i) => {
+          <div className="relative size-6 shrink-0">
+            {(session.agent_ids ?? []).slice(0, 3).map((id, i, arr) => {
               const a = agentById.get(id);
               if (!a) return null;
+              // 2 agents: diagonal (top-left / bottom-right)
+              // 3 agents: triangle (top-left, top-right, bottom-center)
+              const positions: [number, number][] =
+                arr.length <= 2
+                  ? [[0, 0], [10, 10]]
+                  : [[0, 0], [0, 12], [11, 6]];
+              const [top, left] = positions[i] ?? [0, 0];
               return (
                 <div
                   key={a.id}
-                  className="absolute size-[14px]"
-                  style={{ top: i === 0 ? 0 : 10, left: i === 0 ? 0 : 10 }}
+                  className="absolute size-[12px]"
+                  style={{ top, left }}
                 >
-                  <ActorAvatar actorType="agent" actorId={a.id} size={14} />
+                  <ActorAvatar actorType="agent" actorId={a.id} size={12} />
                 </div>
               );
             })}

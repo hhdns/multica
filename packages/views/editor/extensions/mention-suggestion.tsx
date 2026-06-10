@@ -594,7 +594,20 @@ export function createMentionSuggestion(
         const normalizedQuery = query.trim();
         const contextItems = (options.getContextItems?.() ?? []).filter((item) => matchesMentionQuery(item, query));
         if (!normalizedQuery) return contextItems;
-        return mergeMentionItems(contextItems, buildSyncItems(query));
+        // With a query: people (agents/members/squads) must appear before context
+        // issues so that typing an agent's name always surfaces the agent at the
+        // top of the list. Without this ordering, a context issue whose title
+        // contains the query would appear first and be accidentally selected —
+        // especially when the async server search resets selectedIndex to 0 after
+        // the user has already navigated to the agent row.
+        const syncItems = buildSyncItems(query);
+        const syncPeople = syncItems.filter(
+          (i) => i.type === "member" || i.type === "agent" || i.type === "squad" || i.type === "all",
+        );
+        const syncIssues = syncItems.filter(
+          (i) => i.type === "issue" || i.type === "project",
+        );
+        return mergeMentionItems(syncPeople, contextItems, syncIssues);
       }
       return buildSyncItems(query);
     },
