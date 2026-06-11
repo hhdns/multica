@@ -3172,7 +3172,7 @@ func (h *Handler) maybeRecordIssueLifecycleSignals(ctx context.Context, prev, cu
 		curr.Status != "done" && curr.Status != "cancelled" &&
 		curr.AssigneeType.String == "agent" && curr.AssigneeID.Valid {
 		service.RecordCommentSignal(ctx, h.Queries, curr.AssigneeID, curr.WorkspaceID,
-			service.SignalTypeFailure, 0.8, "Issue reopened after being marked "+prev.Status,
+			service.SignalTypeFailure, 0.4, "Issue reopened after being marked "+prev.Status,
 			pgtype.UUID{}, pgtype.UUID{})
 	}
 
