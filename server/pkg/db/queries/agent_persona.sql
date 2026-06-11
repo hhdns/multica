@@ -69,6 +69,10 @@ UPDATE agent_interaction_signal
 SET type = $2, weight = $3
 WHERE id = $1 AND NOT processed;
 
+-- name: DeleteAgentInteractionSignal :exec
+DELETE FROM agent_interaction_signal
+WHERE id = $1 AND agent_id = $2;
+
 -- name: SetAgentPersonaSynthesizedAt :exec
 UPDATE agent_persona SET
     last_synthesized_at = now(),

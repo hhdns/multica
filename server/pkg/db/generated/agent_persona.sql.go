@@ -81,6 +81,21 @@ func (q *Queries) CreateAgentInteractionSignal(ctx context.Context, arg CreateAg
 	return i, err
 }
 
+const deleteAgentInteractionSignal = `-- name: DeleteAgentInteractionSignal :exec
+DELETE FROM agent_interaction_signal
+WHERE id = $1 AND agent_id = $2
+`
+
+type DeleteAgentInteractionSignalParams struct {
+	ID      pgtype.UUID `json:"id"`
+	AgentID pgtype.UUID `json:"agent_id"`
+}
+
+func (q *Queries) DeleteAgentInteractionSignal(ctx context.Context, arg DeleteAgentInteractionSignalParams) error {
+	_, err := q.db.Exec(ctx, deleteAgentInteractionSignal, arg.ID, arg.AgentID)
+	return err
+}
+
 const driftAgentPersonaTraits = `-- name: DriftAgentPersonaTraits :one
 UPDATE agent_persona SET
     trait_thoroughness  = GREATEST(0, LEAST(100, trait_thoroughness  + $2)),

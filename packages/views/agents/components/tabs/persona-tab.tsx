@@ -259,7 +259,7 @@ export function PersonaTab({ agent, canEdit }: PersonaTabProps) {
         error={synthesisError}
         backendConfigured={personaSynthesisBackend !== ""}
       />
-      {persona.recent_signals.length > 0 && <SignalsSection persona={persona} />}
+      {persona.recent_signals.length > 0 && <SignalsSection persona={persona} agentId={agent.id} canEdit={canEdit} />}
       <MemoriesSection agentId={agent.id} canEdit={canEdit} />
       <EpisodeRecallSection persona={persona} canEdit={canEdit} onSave={(data) => mutation.mutate(data)} saving={mutation.isPending} />
       <EmbeddingsSection workspaceId={agent.workspace_id} canEdit={canEdit} />
@@ -1106,24 +1106,90 @@ function LLMCallsSection({ agentId }: { agentId: string }) {
   );
 }
 
-function SignalsSection({ persona }: { persona: AgentPersona }) {
+function SignalRow({
+  signal,
+  agentId,
+  canEdit,
+  onDeleted,
+}: {
+  signal: AgentPersona["recent_signals"][number];
+  agentId: string;
+  canEdit: boolean;
+  onDeleted: (id: string) => void;
+}) {
+  const [confirmDelete, setConfirmDelete] = useState(false);
+  const del = useMutation({
+    mutationFn: () => api.deleteAgentSignal(agentId, signal.id),
+    onSuccess: () => onDeleted(signal.id),
+  });
+
+  return (
+    <div className="group flex items-start gap-2.5 px-3 py-2.5">
+      <span className="mt-0.5 shrink-0">{SIGNAL_ICONS[signal.type] ?? null}</span>
+      <div className="min-w-0 flex-1">
+        <p className="truncate text-xs text-foreground">{signal.content}</p>
+        <p className="mt-0.5 text-[10px] text-muted-foreground capitalize">
+          {signal.type.replace(/_/g, " ")} · {fmtDatetime(signal.created_at)}
+        </p>
+      </div>
+      <span className="shrink-0 text-[10px] tabular-nums text-muted-foreground">
+        ×{signal.weight.toFixed(1)}
+      </span>
+      {canEdit && (
+        <div className="flex shrink-0 items-center gap-0.5 opacity-0 transition-opacity group-hover:opacity-100">
+          {confirmDelete ? (
+            <>
+              <Button
+                variant="ghost"
+                size="icon-sm"
+                title="Confirm delete"
+                className="text-destructive hover:bg-destructive/10 hover:text-destructive"
+                onClick={() => del.mutate()}
+                disabled={del.isPending}
+              >
+                {del.isPending ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Check className="h-3.5 w-3.5" />}
+              </Button>
+              <Button
+                variant="ghost"
+                size="icon-sm"
+                title="Cancel"
+                className="text-muted-foreground hover:text-foreground"
+                onClick={() => setConfirmDelete(false)}
+              >
+                <X className="h-3.5 w-3.5" />
+              </Button>
+            </>
+          ) : (
+            <Button
+              variant="ghost"
+              size="icon-sm"
+              className="text-muted-foreground hover:text-destructive"
+              title="Delete"
+              onClick={() => setConfirmDelete(true)}
+            >
+              <Trash2 className="h-3.5 w-3.5" />
+            </Button>
+          )}
+        </div>
+      )}
+    </div>
+  );
+}
+
+function SignalsSection({ persona, agentId, canEdit }: { persona: AgentPersona; agentId: string; canEdit: boolean }) {
+  const [signals, setSignals] = useState(persona.recent_signals.slice(0, 10));
+  useEffect(() => { setSignals(persona.recent_signals.slice(0, 10)); }, [persona.recent_signals]);
+
+  const handleDeleted = (id: string) => setSignals((prev) => prev.filter((s) => s.id !== id));
+
+  if (signals.length === 0) return null;
+
   return (
     <div className="flex flex-col gap-2">
       <SectionTitle>Recent Feedback Signals</SectionTitle>
       <div className="flex flex-col divide-y rounded-lg border">
-        {persona.recent_signals.slice(0, 10).map((signal) => (
-          <div key={signal.id} className="flex items-start gap-2.5 px-3 py-2.5">
-            <span className="mt-0.5 shrink-0">{SIGNAL_ICONS[signal.type] ?? null}</span>
-            <div className="min-w-0 flex-1">
-              <p className="truncate text-xs text-foreground">{signal.content}</p>
-              <p className="mt-0.5 text-[10px] text-muted-foreground capitalize">
-                {signal.type.replace(/_/g, " ")} · {fmtDatetime(signal.created_at)}
-              </p>
-            </div>
-            <span className="shrink-0 text-[10px] tabular-nums text-muted-foreground">
-              ×{signal.weight.toFixed(1)}
-            </span>
-          </div>
+        {signals.map((signal) => (
+          <SignalRow key={signal.id} signal={signal} agentId={agentId} canEdit={canEdit} onDeleted={handleDeleted} />
         ))}
       </div>
     </div>

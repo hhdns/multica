@@ -930,6 +930,10 @@ export class ApiClient {
     });
   }
 
+  async deleteAgentSignal(agentId: string, signalId: string): Promise<void> {
+    return this.fetch(`/api/agents/${agentId}/signals/${signalId}`, { method: "DELETE" });
+  }
+
   async listAgentLLMCalls(id: string): Promise<import("../types").PersonaLLMCall[]> {
     return this.fetch(`/api/agents/${id}/llm-calls`);
   }

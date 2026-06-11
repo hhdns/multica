@@ -407,6 +407,32 @@ func (h *Handler) DeleteAgentMemory(w http.ResponseWriter, r *http.Request) {
 	w.WriteHeader(http.StatusNoContent)
 }
 
+// DeleteAgentSignal handles DELETE /api/agents/{id}/signals/{signalId}.
+func (h *Handler) DeleteAgentSignal(w http.ResponseWriter, r *http.Request) {
+	agentID := chi.URLParam(r, "id")
+	agent, ok := h.loadAgentForUser(w, r, agentID)
+	if !ok {
+		return
+	}
+	if !h.canManageAgent(w, r, agent) {
+		return
+	}
+	signalID := chi.URLParam(r, "signalId")
+	sigUUID, ok := parseUUIDOrBadRequest(w, signalID, "signalId")
+	if !ok {
+		return
+	}
+	if err := h.Queries.DeleteAgentInteractionSignal(r.Context(), db.DeleteAgentInteractionSignalParams{
+		ID:      sigUUID,
+		AgentID: agent.ID,
+	}); err != nil {
+		slog.Warn("delete agent signal: query failed", "error", err, "signal_id", signalID)
+		writeError(w, http.StatusInternalServerError, "failed to delete signal")
+		return
+	}
+	w.WriteHeader(http.StatusNoContent)
+}
+
 // UpdateAgentMemory handles PATCH /api/agents/{id}/memories/{memoryId}.
 // Accepts {"content": "..."} and replaces the memory text, clearing the
 // embedding so it is regenerated on next rebuild.

@@ -881,6 +881,7 @@ func NewRouterWithOptions(pool *pgxpool.Pool, hub *realtime.Hub, bus *events.Bus
 						r.Delete("/", h.DeleteAgentMemory)
 						r.Patch("/", h.UpdateAgentMemory)
 					})
+					r.Delete("/signals/{signalId}", h.DeleteAgentSignal)
 					r.Get("/llm-calls", h.ListAgentLLMCalls)
 				})
 			})
