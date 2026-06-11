@@ -1805,6 +1805,15 @@ func (h *Handler) maybeCapturePersonaSignal(
 	content string,
 ) {
 	ctx := context.Background()
+
+	// Resolve agent name once so the classifier can distinguish "is this about me?"
+	agentName := ""
+	if agentID.Valid {
+		if a, err := h.Queries.GetAgent(ctx, agentID); err == nil {
+			agentName = a.Name
+		}
+	}
+
 	kwType, kwWeight, kwOk := service.DetectCommentSignal(content)
 
 	if kwOk {
@@ -1813,12 +1822,12 @@ func (h *Handler) maybeCapturePersonaSignal(
 			kwType, kwWeight, content, commentID, userID)
 		// Phase 2: async LLM upgrade (refines type/weight if result differs).
 		if sigID.Valid {
-			go service.MaybeLLMUpgradeSignal(ctx, h.Queries, sigID, kwType, kwWeight, content)
+			go service.MaybeLLMUpgradeSignal(ctx, h.Queries, sigID, kwType, kwWeight, content, agentName)
 		}
 	} else {
 		// Keywords found nothing — try LLM async; record only if it finds a signal.
 		go func() {
-			llmType, llmWeight, llmOk := service.ClassifyCommentSignal(ctx, content)
+			llmType, llmWeight, llmOk := service.ClassifyCommentSignal(ctx, content, agentName)
 			if llmOk {
 				service.RecordCommentSignal(ctx, h.Queries, agentID, workspaceID,
 					llmType, llmWeight, content, commentID, userID)

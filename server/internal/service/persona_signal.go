@@ -28,13 +28,15 @@ const driftBatchThreshold = 5
 // Tight because we only need a small JSON object back.
 const classifyMaxTok = 80
 
-// ClassifyCommentSignal detects praise or criticism in a human comment.
-// If a synthesis backend is configured (Anthropic or OpenAI-compat), it uses
-// an LLM for accurate classification. Otherwise it falls back to keyword matching.
-func ClassifyCommentSignal(ctx context.Context, content string) (signalType string, weight float32, ok bool) {
+// ClassifyCommentSignal detects praise or criticism in a human comment directed
+// at the given agent (identified by agentName). If a synthesis backend is
+// configured it uses an LLM; otherwise it falls back to keyword matching.
+// agentName is included in the prompt so the LLM can distinguish criticism of
+// this agent from criticism of other entities mentioned in the same comment.
+func ClassifyCommentSignal(ctx context.Context, content, agentName string) (signalType string, weight float32, ok bool) {
 	cfg := resolveSynthesisConfig()
 	if cfg.backend != "" {
-		st, w, _, err := classifyCommentWithLLM(ctx, cfg, content)
+		st, w, _, err := classifyCommentWithLLM(ctx, cfg, content, agentName)
 		if err != nil {
 			slog.Warn("persona: LLM comment classification failed, using keywords", "error", err)
 		} else {
@@ -48,13 +50,26 @@ func ClassifyCommentSignal(ctx context.Context, content string) (signalType stri
 }
 
 // classifyCommentWithLLM asks the configured LLM backend to classify a comment.
+// agentName identifies which agent is being evaluated; the LLM uses it to
+// distinguish criticism of this agent from criticism of other entities mentioned.
 // Returns signalType ("praise"/"criticism"/"neutral"), weight (0.1–1.0), and the raw llmCallResult for logging.
-func classifyCommentWithLLM(ctx context.Context, cfg synthesisConfig, content string) (signalType string, weight float32, res llmCallResult, err error) {
-	prompt := fmt.Sprintf(
-		`Classify this comment about an AI agent's work. Output ONLY JSON with no explanation: {"type":"praise"|"criticism"|"neutral","weight":0.1-1.0}
+func classifyCommentWithLLM(ctx context.Context, cfg synthesisConfig, content, agentName string) (signalType string, weight float32, res llmCallResult, err error) {
+	var prompt string
+	if agentName != "" {
+		prompt = fmt.Sprintf(
+			`Classify whether this comment is praise or criticism directed specifically at the AI agent named %q.
+If the comment is about a different person, agent, or entity (not %q), output {"type":"neutral","weight":0.1}.
+Output ONLY JSON with no explanation: {"type":"praise"|"criticism"|"neutral","weight":0.1-1.0}
+Weight: 1.0=very strong, 0.5=moderate, 0.1=subtle.
+
+Comment: %q`, agentName, agentName, content)
+	} else {
+		prompt = fmt.Sprintf(
+			`Classify this comment about an AI agent's work. Output ONLY JSON with no explanation: {"type":"praise"|"criticism"|"neutral","weight":0.1-1.0}
 Weight: 1.0=very strong, 0.5=moderate, 0.1=subtle.
 
 Comment: %q`, content)
+	}
 
 	switch cfg.backend {
 	case "anthropic":
@@ -189,9 +204,10 @@ func RecordCommentSignal(
 }
 
 // MaybeLLMUpgradeSignal asynchronously refines an already-recorded signal's
-// type and weight using LLM classification. Only updates if the LLM result
-// differs from the keyword result (kwType/kwWeight) by a meaningful margin,
-// and only while the signal is still unprocessed by the drift pass.
+// type and weight using LLM classification. agentName is passed to the
+// classifier so it can distinguish criticism of this agent from other entities.
+// Only updates if the LLM result differs from the keyword result by a meaningful
+// margin, and only while the signal is still unprocessed by the drift pass.
 func MaybeLLMUpgradeSignal(
 	ctx context.Context,
 	q *db.Queries,
@@ -199,13 +215,14 @@ func MaybeLLMUpgradeSignal(
 	kwType string,
 	kwWeight float32,
 	content string,
+	agentName string,
 ) {
 	cfg := resolveSynthesisConfig()
 	if cfg.backend == "" {
 		return
 	}
 
-	llmType, llmWeight, llmRes, err := classifyCommentWithLLM(ctx, cfg, content)
+	llmType, llmWeight, llmRes, err := classifyCommentWithLLM(ctx, cfg, content, agentName)
 	if err != nil {
 		slog.Debug("persona: LLM signal upgrade failed", "error", err)
 		return

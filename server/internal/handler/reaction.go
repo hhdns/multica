@@ -1,13 +1,16 @@
 package handler
 
 import (
+	"context"
 	"encoding/json"
 	"log/slog"
 	"net/http"
+	"strings"
 
 	"github.com/go-chi/chi/v5"
 	"github.com/jackc/pgx/v5/pgtype"
 	"github.com/multica-ai/multica/server/internal/logger"
+	"github.com/multica-ai/multica/server/internal/service"
 	db "github.com/multica-ai/multica/server/pkg/db/generated"
 	"github.com/multica-ai/multica/server/pkg/protocol"
 )
@@ -104,6 +107,18 @@ func (h *Handler) AddReaction(w http.ResponseWriter, r *http.Request) {
 		"comment_author_type": comment.AuthorType,
 		"comment_author_id":   uuidToString(comment.AuthorID),
 	})
+
+	// Capture a praise signal when a human reacts positively to an agent's comment.
+	if actorType == "member" && comment.AuthorType == "agent" && isPositiveEmoji(req.Emoji) {
+		go func() {
+			ctx := context.Background()
+			service.RecordCommentSignal(ctx, h.Queries, comment.AuthorID, wsUUID,
+				service.SignalTypePraise, 0.6,
+				req.Emoji+" reaction on comment",
+				comment.ID, parseUUID(userID))
+		}()
+	}
+
 	writeJSON(w, http.StatusCreated, resp)
 }
 
@@ -166,6 +181,18 @@ func (h *Handler) RemoveReaction(w http.ResponseWriter, r *http.Request) {
 		"actor_id":   actorID,
 	})
 	w.WriteHeader(http.StatusNoContent)
+}
+
+// isPositiveEmoji returns true for emoji that express approval or enthusiasm.
+func isPositiveEmoji(emoji string) bool {
+	emoji = strings.TrimSpace(emoji)
+	positiveSet := map[string]bool{
+		"❤️": true, "❤": true, "👍": true, "🎉": true, "🙌": true,
+		"🔥": true, "⭐": true, "✨": true, "💯": true, "🥳": true,
+		"😍": true, "🤩": true, "👏": true, "💪": true, "🚀": true,
+		"+1": true,
+	}
+	return positiveSet[emoji]
 }
 
 // groupReactions fetches reactions for the given comment IDs and groups them by comment_id.
