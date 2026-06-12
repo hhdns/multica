@@ -233,7 +233,14 @@ export function ChatMessageSkeleton() {
 
 function formatTimestamp(isoString: string): string {
   const d = new Date(isoString);
-  return `${d.getHours().toString().padStart(2, "0")}:${d.getMinutes().toString().padStart(2, "0")}`;
+  const time = `${d.getHours().toString().padStart(2, "0")}:${d.getMinutes().toString().padStart(2, "0")}`;
+  const today = new Date();
+  const isToday =
+    d.getFullYear() === today.getFullYear() &&
+    d.getMonth() === today.getMonth() &&
+    d.getDate() === today.getDate();
+  if (isToday) return time;
+  return d.toLocaleDateString(undefined, { month: "short", day: "numeric" }) + " " + time;
 }
 
 function MessageBubble({ message, isPending, agentNameById }: { message: ChatMessage; isPending: boolean; agentNameById?: Map<string, string>; }) {
