@@ -514,7 +514,7 @@ export function ChatWindow() {
       } catch (err) {
         apiLogger.error("sendChatMessage.error.rollback", { sessionId, optimisticId: optimistic.id, err });
         removeChatMessageFromCaches(qc, sessionId, optimistic.id);
-        qc.setQueryData(chatKeys.pendingTask(sessionId), {});
+        qc.setQueryData<ChatPendingTasksMap>(chatKeys.pendingTask(sessionId), {});
         setRestoreDraftRequest({
           id: `send-failed-${optimistic.id}`,
           content: finalContent,
