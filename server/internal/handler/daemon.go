@@ -1852,7 +1852,7 @@ func (h *Handler) ClaimTaskByRuntime(w http.ResponseWriter, r *http.Request) {
 		if wsErr == nil {
 			chatCtx := service.GetRecentChatContext(
 				r.Context(), h.Queries,
-				parseUUID(resp.Agent.ID), wsUUID,
+				parseUUID(resp.Agent.ID), wsUUID, parseUUID(resp.ChatSessionID),
 				msgLimit,
 			)
 			appendMemCtx(&resp.Agent.MemoryContext, chatCtx)

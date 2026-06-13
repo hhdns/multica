@@ -194,10 +194,13 @@ LIMIT 1;
 -- without requiring an LLM call.
 -- Covers both private sessions (cs.agent_id) and group sessions where the
 -- agent joined as a participant (chat_session_participant).
+-- Excludes the current session: its messages are already in the agent's
+-- resumed conversation context, so including them here causes duplication.
 SELECT cm.id, cm.chat_session_id, cm.role, cm.content, cm.created_at
 FROM chat_message cm
 JOIN chat_session cs ON cs.id = cm.chat_session_id
 WHERE cs.workspace_id = @workspace_id
+  AND cs.id != @current_session_id
   AND (
       cs.agent_id = @agent_id
       OR EXISTS (

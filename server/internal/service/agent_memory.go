@@ -1470,16 +1470,17 @@ const recentChatMsgTruncate = 2_000
 func GetRecentChatContext(
 	ctx context.Context,
 	q *db.Queries,
-	agentID, workspaceID pgtype.UUID,
+	agentID, workspaceID, currentSessionID pgtype.UUID,
 	limit int32,
 ) string {
 	if limit <= 0 {
 		limit = 20
 	}
 	rows, err := q.GetRecentAgentChatMessages(ctx, db.GetRecentAgentChatMessagesParams{
-		AgentID:     agentID,
-		WorkspaceID: workspaceID,
-		MsgLimit:    limit,
+		AgentID:          agentID,
+		WorkspaceID:      workspaceID,
+		CurrentSessionID: currentSessionID,
+		MsgLimit:         limit,
 	})
 	if err != nil {
 		slog.Warn("GetRecentChatContext: query failed", "error", err,

@@ -271,7 +271,7 @@ func (q *Queries) DeleteChatSession(ctx context.Context, arg DeleteChatSessionPa
 const deleteUserChatMessageByTask = `-- name: DeleteUserChatMessageByTask :one
 DELETE FROM chat_message
 WHERE task_id = $1 AND role = 'user'
-RETURNING id, chat_session_id, role, content, task_id, created_at, failure_reason, elapsed_ms
+RETURNING id, chat_session_id, role, content, task_id, created_at, failure_reason, elapsed_ms, agent_id
 `
 
 func (q *Queries) DeleteUserChatMessageByTask(ctx context.Context, taskID pgtype.UUID) (ChatMessage, error) {
@@ -286,6 +286,7 @@ func (q *Queries) DeleteUserChatMessageByTask(ctx context.Context, taskID pgtype
 		&i.CreatedAt,
 		&i.FailureReason,
 		&i.ElapsedMs,
+		&i.AgentID,
 	)
 	return i, err
 }
@@ -530,45 +531,31 @@ func (q *Queries) GetPendingChatTask(ctx context.Context, chatSessionID pgtype.U
 	return i, err
 }
 
-const linkChatMessageToTask = `-- name: LinkChatMessageToTask :exec
-UPDATE chat_message
-SET task_id = $2
-WHERE id = $1 AND role = 'user'
-`
-
-type LinkChatMessageToTaskParams struct {
-	ID     pgtype.UUID `json:"id"`
-	TaskID pgtype.UUID `json:"task_id"`
-}
-
-func (q *Queries) LinkChatMessageToTask(ctx context.Context, arg LinkChatMessageToTaskParams) error {
-	_, err := q.db.Exec(ctx, linkChatMessageToTask, arg.ID, arg.TaskID)
-	return err
-}
-
 const getRecentAgentChatMessages = `-- name: GetRecentAgentChatMessages :many
 SELECT cm.id, cm.chat_session_id, cm.role, cm.content, cm.created_at
 FROM chat_message cm
 JOIN chat_session cs ON cs.id = cm.chat_session_id
 WHERE cs.workspace_id = $1
+  AND cs.id != $2
   AND (
-      cs.agent_id = $2
+      cs.agent_id = $3
       OR EXISTS (
           SELECT 1 FROM chat_session_participant csp
-          WHERE csp.chat_session_id = cs.id AND csp.agent_id = $2
+          WHERE csp.chat_session_id = cs.id AND csp.agent_id = $3
       )
   )
   AND cm.role IN ('user', 'assistant')
   AND cm.failure_reason IS NULL
   AND cm.content != ''
 ORDER BY cm.created_at DESC
-LIMIT $3
+LIMIT $4
 `
 
 type GetRecentAgentChatMessagesParams struct {
-	WorkspaceID pgtype.UUID `json:"workspace_id"`
-	AgentID     pgtype.UUID `json:"agent_id"`
-	MsgLimit    int32       `json:"msg_limit"`
+	WorkspaceID      pgtype.UUID `json:"workspace_id"`
+	CurrentSessionID pgtype.UUID `json:"current_session_id"`
+	AgentID          pgtype.UUID `json:"agent_id"`
+	MsgLimit         int32       `json:"msg_limit"`
 }
 
 type GetRecentAgentChatMessagesRow struct {
@@ -585,8 +572,15 @@ type GetRecentAgentChatMessagesRow struct {
 // without requiring an LLM call.
 // Covers both private sessions (cs.agent_id) and group sessions where the
 // agent joined as a participant (chat_session_participant).
+// Excludes the current session: its messages are already in the agent's
+// resumed conversation context, so including them here causes duplication.
 func (q *Queries) GetRecentAgentChatMessages(ctx context.Context, arg GetRecentAgentChatMessagesParams) ([]GetRecentAgentChatMessagesRow, error) {
-	rows, err := q.db.Query(ctx, getRecentAgentChatMessages, arg.WorkspaceID, arg.AgentID, arg.MsgLimit)
+	rows, err := q.db.Query(ctx, getRecentAgentChatMessages,
+		arg.WorkspaceID,
+		arg.CurrentSessionID,
+		arg.AgentID,
+		arg.MsgLimit,
+	)
 	if err != nil {
 		return nil, err
 	}
@@ -609,6 +603,22 @@ func (q *Queries) GetRecentAgentChatMessages(ctx context.Context, arg GetRecentA
 		return nil, err
 	}
 	return items, nil
+}
+
+const linkChatMessageToTask = `-- name: LinkChatMessageToTask :exec
+UPDATE chat_message
+SET task_id = $2
+WHERE id = $1 AND role = 'user'
+`
+
+type LinkChatMessageToTaskParams struct {
+	ID     pgtype.UUID `json:"id"`
+	TaskID pgtype.UUID `json:"task_id"`
+}
+
+func (q *Queries) LinkChatMessageToTask(ctx context.Context, arg LinkChatMessageToTaskParams) error {
+	_, err := q.db.Exec(ctx, linkChatMessageToTask, arg.ID, arg.TaskID)
+	return err
 }
 
 const listAllChatSessionsByCreator = `-- name: ListAllChatSessionsByCreator :many
