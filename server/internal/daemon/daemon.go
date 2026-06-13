@@ -3499,13 +3499,24 @@ func (d *Daemon) runTask(ctx context.Context, task Task, provider string, slot i
 			thinkingLevel = ""
 		}
 	}
+	// Antigravity's agy CLI in print mode (-p) with --conversation replays
+	// the full conversation history to stdout before the new reply. For chat
+	// tasks this causes the previous assistant turn to be prepended verbatim
+	// to every response. Disable session resumption for agy chat tasks so
+	// each turn starts fresh; cross-session continuity is provided by the
+	// Layer-1 recall in issue_context.md instead.
+	resumeSessionID := task.PriorSessionID
+	if provider == "antigravity" && task.ChatSessionID != "" {
+		resumeSessionID = ""
+	}
+
 	execOpts := agent.ExecOptions{
 		Cwd:                       env.WorkDir,
 		Model:                     model,
 		ThreadName:                deriveTaskThreadName(task),
 		Timeout:                   d.cfg.AgentTimeout,
 		SemanticInactivityTimeout: d.cfg.CodexSemanticInactivityTimeout,
-		ResumeSessionID:           task.PriorSessionID,
+		ResumeSessionID:           resumeSessionID,
 		ExtraArgs:                 extraArgs,
 		CustomArgs:                customArgs,
 		McpConfig:                 mcpConfig,
