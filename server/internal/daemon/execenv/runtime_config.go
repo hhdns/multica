@@ -629,6 +629,7 @@ func buildMetaSkillContent(provider string, ctx TaskContextForEnv) string {
 	if ctx.ChatSessionID != "" {
 		// Chat task: interactive assistant mode
 		b.WriteString("**You are in chat mode.** A user is messaging you directly in a chat window.\n\n")
+		b.WriteString("- **Before responding, read `.agent_context/issue_context.md`** — it contains your cross-session conversation history with this user. Reference it when answering questions about previous exchanges.\n")
 		b.WriteString("- Respond conversationally and helpfully to the user's message\n")
 		b.WriteString("- You have full access to the `multica` CLI to look up issues, workspace info, members, agents, etc.\n")
 		b.WriteString("- If asked about issues, use `multica issue list --output json` or `multica issue get <id> --output json`\n")
