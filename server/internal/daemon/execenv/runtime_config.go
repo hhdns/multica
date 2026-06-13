@@ -629,16 +629,14 @@ func buildMetaSkillContent(provider string, ctx TaskContextForEnv) string {
 	if ctx.ChatSessionID != "" {
 		// Chat task: interactive assistant mode
 		b.WriteString("**You are in chat mode.** A user is messaging you directly in a chat window.\n\n")
-		if ctx.AgentMemoryContext != "" {
-			b.WriteString("- **Before responding, read `.agent_context/issue_context.md`** — it contains your cross-session conversation history with this user. Reference it when answering questions about previous exchanges.\n")
-		}
+		b.WriteString("- **Before responding, read `.agent_context/issue_context.md`** — it contains your cross-session conversation history with this user. Reference it when answering questions about previous exchanges.\n")
 		b.WriteString("- Respond conversationally and helpfully to the user's message\n")
 		b.WriteString("- You have full access to the `multica` CLI to look up issues, workspace info, members, agents, etc.\n")
 		b.WriteString("- If asked about issues, use `multica issue list --output json` or `multica issue get <id> --output json`\n")
 		b.WriteString("- If asked about the workspace, use `multica workspace get --output json`\n")
 		b.WriteString("- If asked to perform actions (create issues, update status, etc.), use the appropriate CLI commands\n")
 		b.WriteString("- If the task requires code changes, use `multica repo checkout <url>` to get the code first. Use `--ref <branch-or-sha>` when you need an exact revision\n")
-		b.WriteString("- Keep responses concise and direct\n\n")
+		b.WriteString("- Keep responses concise and direct. Output only your conversational reply — do not append a work log, step summary, or tool-call trace.\n\n")
 	} else if ctx.QuickCreatePrompt != "" {
 		// Quick-create task: detailed field / output rules live in the
 		// per-turn prompt (BuildPrompt → buildQuickCreatePrompt) so they
