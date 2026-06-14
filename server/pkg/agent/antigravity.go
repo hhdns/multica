@@ -69,7 +69,11 @@ func (b *antigravityBackend) Execute(ctx context.Context, prompt string, opts Ex
 	args := buildAntigravityArgs(prompt, logPath, timeout, opts, b.cfg.Logger)
 
 	cmd := exec.CommandContext(runCtx, execPath, args...)
-	hideAgentWindow(cmd)
+	// agy runs in strict print mode (-p) and does not spawn interactive
+	// grandchildren, so CREATE_NO_WINDOW is safe here. It forces agy to
+	// write stdout through the pipe rather than via WriteConsole() directly
+	// to a console handle — the latter bypasses pipes entirely on Windows.
+	hideAgentWindowNoConsole(cmd)
 	b.cfg.Logger.Info("agent command", "exec", execPath, "args", args)
 	cmd.WaitDelay = 10 * time.Second
 	if opts.Cwd != "" {
