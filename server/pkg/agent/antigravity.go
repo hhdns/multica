@@ -124,9 +124,10 @@ func (b *antigravityBackend) Execute(ctx context.Context, prompt string, opts Ex
 				output.WriteByte('\n')
 			}
 			output.WriteString(line)
-			if strings.TrimSpace(line) != "" {
-				trySend(msgCh, Message{Type: MessageText, Content: line})
-			}
+			// Empty lines (paragraph separators) are forwarded as a blank
+			// MessageText so the timeline accumulator can reconstruct the
+			// \n\n boundary. Non-empty lines are forwarded verbatim.
+			trySend(msgCh, Message{Type: MessageText, Content: line})
 		}
 		if err := scanner.Err(); err != nil {
 			b.cfg.Logger.Warn("agy stdout scanner error", "err", err)
