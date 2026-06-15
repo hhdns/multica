@@ -1329,6 +1329,17 @@ func (s *TaskService) CompleteTask(ctx context.Context, taskID pgtype.UUID, resu
 			AuthorID: task.AgentID,
 			Since:    task.StartedAt,
 		})
+		// Extra guard for comment-triggered tasks: check whether the agent has
+		// already replied in the specific trigger thread regardless of time.
+		// This catches races where HasAgentCommentedSince misses a CLI reply
+		// that committed concurrently with CompleteTask, which would otherwise
+		// produce a duplicate fallback comment ("二连发").
+		if !agentCommented && task.TriggerCommentID.Valid {
+			agentCommented, _ = s.Queries.HasAgentRepliedInThread(ctx, db.HasAgentRepliedInThreadParams{
+				ParentID: task.TriggerCommentID,
+				AgentID:  task.AgentID,
+			})
+		}
 		if !suppressNoActionComment && !agentCommented {
 			var payload protocol.TaskCompletedPayload
 			if err := json.Unmarshal(result, &payload); err == nil {
