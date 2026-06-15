@@ -128,10 +128,13 @@ func (b *antigravityBackend) Execute(ctx context.Context, prompt string, opts Ex
 				output.WriteByte('\n')
 			}
 			output.WriteString(line)
-			// Empty lines (paragraph separators) are forwarded as a blank
-			// MessageText so the timeline accumulator can reconstruct the
-			// \n\n boundary. Non-empty lines are forwarded verbatim.
-			trySend(msgCh, Message{Type: MessageText, Content: line})
+			// Each line is forwarded with its trailing newline included in
+			// the Content so the generic pendingText accumulator (which
+			// concatenates without a separator) reconstructs the original
+			// line structure correctly. An empty line becomes "\n" alone,
+			// producing a \n\n double-break (paragraph spacing) when
+			// concatenated with the preceding line's trailing newline.
+			trySend(msgCh, Message{Type: MessageText, Content: line + "\n"})
 		}
 		if err := scanner.Err(); err != nil {
 			b.cfg.Logger.Warn("agy stdout scanner error", "err", err)

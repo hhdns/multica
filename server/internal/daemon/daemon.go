@@ -3974,9 +3974,6 @@ func (d *Daemon) executeAndDrain(ctx context.Context, backend agent.Backend, pro
 				case agent.MessageText:
 					taskLog.Debug("agent", "text", truncateLog(msg.Content, 200))
 					mu.Lock()
-					if pendingText.Len() > 0 {
-						pendingText.WriteByte('\n')
-					}
 					pendingText.WriteString(msg.Content)
 					mu.Unlock()
 				case agent.MessageError:
