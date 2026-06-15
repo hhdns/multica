@@ -6,6 +6,7 @@ import { Ban, CheckCircle2, ChevronRight, Loader2, RotateCcw, Square, XCircle } 
 import { toast } from "sonner";
 import { api } from "@multica/core/api";
 import { issueKeys } from "@multica/core/issues/queries";
+import { taskMessagesOptions } from "@multica/core/chat/queries";
 import type { AgentTask, TaskFailureReason } from "@multica/core/types";
 import { useTimeAgo } from "../../i18n";
 import {
@@ -15,7 +16,7 @@ import {
 } from "@multica/ui/components/ui/tooltip";
 import { ActorAvatar } from "../../common/actor-avatar";
 import { formatDuration } from "../../agents/components/agent-activity-hover-content";
-import { TranscriptButton } from "../../common/task-transcript";
+import { TranscriptButton, buildTimeline } from "../../common/task-transcript";
 import { failureReasonLabel } from "../../agents/components/tabs/task-failure";
 import { useT } from "../../i18n";
 import { TerminateTaskConfirmDialog } from "./terminate-task-confirm-dialog";
@@ -280,6 +281,20 @@ export function ActiveTaskRow({
   const showTranscript =
     task.status !== "queued" && task.status !== "waiting_local_directory";
 
+  // Subscribe to task messages while the task is live so the transcript
+  // dialog updates in real-time via WS task:message events. The query key
+  // ["task-messages", taskId] is the same one useRealtimeSync writes to,
+  // so WS events flow directly into the dialog without polling.
+  const isLive = task.status === "running" || task.status === "dispatched";
+  const { data: rawMessages } = useQuery({
+    ...taskMessagesOptions(task.id),
+    enabled: isLive && showTranscript,
+  });
+  const liveItems = useMemo(
+    () => (rawMessages ? buildTimeline(rawMessages) : undefined),
+    [rawMessages],
+  );
+
   const handleCancel = async () => {
     if (cancelling) return;
     setCancelling(true);
@@ -314,7 +329,8 @@ export function ActiveTaskRow({
           <TranscriptButton
             task={task}
             agentName=""
-            isLive={task.status === "running"}
+            items={liveItems}
+            isLive={isLive}
             title={t(($) => $.execution_log.transcript_tooltip)}
           />
         )}
