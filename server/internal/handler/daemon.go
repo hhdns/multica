@@ -1850,9 +1850,18 @@ func (h *Handler) ClaimTaskByRuntime(w http.ResponseWriter, r *http.Request) {
 		}
 		wsUUID, wsErr := util.ParseUUID(resp.WorkspaceID)
 		if wsErr == nil {
+			// For non-chat tasks ChatSessionID is ""; use the zero UUID so the
+			// SQL filter (cs.id != current_session_id) is a no-op rather than
+			// comparing against NULL (which would filter all rows).
+			currentSessionUUID := pgtype.UUID{Bytes: [16]byte{}, Valid: true}
+			if resp.ChatSessionID != "" {
+				if parsed, err := util.ParseUUID(resp.ChatSessionID); err == nil {
+					currentSessionUUID = parsed
+				}
+			}
 			chatCtx := service.GetRecentChatContext(
 				r.Context(), h.Queries,
-				parseUUID(resp.Agent.ID), wsUUID, parseUUID(resp.ChatSessionID),
+				parseUUID(resp.Agent.ID), wsUUID, currentSessionUUID,
 				msgLimit,
 			)
 			appendMemCtx(&resp.Agent.MemoryContext, chatCtx)
