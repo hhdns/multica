@@ -108,15 +108,25 @@ func (h *Handler) AddReaction(w http.ResponseWriter, r *http.Request) {
 		"comment_author_id":   uuidToString(comment.AuthorID),
 	})
 
-	// Capture a praise signal when a human reacts positively to an agent's comment.
-	if actorType == "member" && comment.AuthorType == "agent" && isPositiveEmoji(req.Emoji) {
-		go func() {
-			ctx := context.Background()
-			service.RecordCommentSignal(ctx, h.Queries, comment.AuthorID, wsUUID,
-				service.SignalTypePraise, 0.6,
-				req.Emoji+" reaction on comment",
-				comment.ID, parseUUID(userID))
-		}()
+	// Capture a signal when a human reacts to an agent's comment.
+	if actorType == "member" && comment.AuthorType == "agent" {
+		if isPositiveEmoji(req.Emoji) {
+			go func() {
+				ctx := context.Background()
+				service.RecordCommentSignal(ctx, h.Queries, comment.AuthorID, wsUUID,
+					service.SignalTypePraise, 0.6,
+					req.Emoji+" reaction on comment",
+					comment.ID, parseUUID(userID))
+			}()
+		} else if isNegativeEmoji(req.Emoji) {
+			go func() {
+				ctx := context.Background()
+				service.RecordCommentSignal(ctx, h.Queries, comment.AuthorID, wsUUID,
+					service.SignalTypeCriticism, 0.6,
+					req.Emoji+" reaction on comment",
+					comment.ID, parseUUID(userID))
+			}()
+		}
 	}
 
 	writeJSON(w, http.StatusCreated, resp)
@@ -193,6 +203,17 @@ func isPositiveEmoji(emoji string) bool {
 		"+1": true,
 	}
 	return positiveSet[emoji]
+}
+
+// isNegativeEmoji returns true for emoji that express disapproval or frustration.
+func isNegativeEmoji(emoji string) bool {
+	emoji = strings.TrimSpace(emoji)
+	negativeSet := map[string]bool{
+		"👎": true, "😕": true, "😡": true, "🤦": true, "😤": true,
+		"💢": true, "🚫": true, "❌": true, "🙁": true, "😞": true,
+		"😣": true, "😩": true, "🤮": true, "-1": true,
+	}
+	return negativeSet[emoji]
 }
 
 // groupReactions fetches reactions for the given comment IDs and groups them by comment_id.
