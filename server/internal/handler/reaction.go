@@ -114,7 +114,7 @@ func (h *Handler) AddReaction(w http.ResponseWriter, r *http.Request) {
 			go func() {
 				ctx := context.Background()
 				service.RecordCommentSignal(ctx, h.Queries, comment.AuthorID, wsUUID,
-					service.SignalTypePraise, 0.6,
+					service.SignalTypePraise, 0.3,
 					req.Emoji+" reaction on comment",
 					comment.ID, parseUUID(userID))
 			}()
@@ -122,7 +122,7 @@ func (h *Handler) AddReaction(w http.ResponseWriter, r *http.Request) {
 			go func() {
 				ctx := context.Background()
 				service.RecordCommentSignal(ctx, h.Queries, comment.AuthorID, wsUUID,
-					service.SignalTypeCriticism, 0.6,
+					service.SignalTypeCriticism, 0.3,
 					req.Emoji+" reaction on comment",
 					comment.ID, parseUUID(userID))
 			}()
